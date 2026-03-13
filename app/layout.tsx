@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AppShell } from "@/components/app-shell";
 
 export const metadata: Metadata = {
-  title: "Payroll App",
-  description: "Payroll management application",
+  title: "PayrollApp",
+  description: "Sistema de gestión de nómina para Centroamérica",
 };
 
 export default function RootLayout({
@@ -13,7 +14,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es">
-      <body className="font-sans antialiased">{children}</body>
+      <body className="font-sans antialiased">
+        <AppShell>{children}</AppShell>
+      </body>
     </html>
   );
 }

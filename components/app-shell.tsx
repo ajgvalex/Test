@@ -10,6 +10,7 @@ import {
   Menu,
   X,
   DollarSign,
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { href: "/employees", label: "Empleados", icon: Users },
   { href: "/payroll", label: "Nómina", icon: Calculator },
   { href: "/reports", label: "Reportes", icon: BarChart3 },
+  { href: "/trading", label: "Trading Bot", icon: Bot },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {

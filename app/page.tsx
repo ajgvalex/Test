@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Users, Calculator, BarChart3, ArrowRight } from "lucide-react";
+import { Users, Calculator, BarChart3, ArrowRight, Bot } from "lucide-react";
 
 const MODULES = [
   {
@@ -25,6 +25,14 @@ const MODULES = [
       "Dashboard con gráficos, recibos PDF, planillas IHSS/OVISSS, archivo bancario de dispersión.",
     icon: BarChart3,
     color: "bg-purple-500/10 text-purple-600",
+  },
+  {
+    href: "/trading",
+    title: "Trading Bot — Polymarket",
+    description:
+      "Agente automatizado de trading en mercados de predicción. Estrategias configurables, gestión de riesgo y paper trading.",
+    icon: Bot,
+    color: "bg-orange-500/10 text-orange-600",
   },
 ];
 

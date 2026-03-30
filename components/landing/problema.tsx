@@ -22,6 +22,12 @@ export function Problema() {
           hacen la nómina así: a mano, con miedo, y sin saber si están
           cumpliendo bien.
         </p>
+        <p>
+          Y si el IHSS o el SAR detectan un error en tu declaración, la multa
+          puede ser mayor que lo que pagas en un año de software. El problema
+          no es solo el tiempo que pierdes — es el riesgo que acumulas cada
+          quincena.
+        </p>
       </div>
     </section>
   );

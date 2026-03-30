@@ -3,7 +3,8 @@ import { IS_MOCK_AUTH } from "@/lib/auth/config";
 
 export async function middleware(request: NextRequest) {
   // Skip auth check for login page
-  if (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/") {
+  const publicPaths = ["/", "/login", "/pricing"];
+  if (publicPaths.includes(request.nextUrl.pathname)) {
     return NextResponse.next();
   }
 

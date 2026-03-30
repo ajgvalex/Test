@@ -4,13 +4,23 @@ export function Hero() {
   return (
     <section className="mx-auto max-w-4xl px-6 py-20 md:py-28">
       <div className="mx-auto max-w-2xl text-center">
+
+        {/* Time metric badge */}
+        <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-landing-hielo px-4 py-1.5 text-xs font-medium text-landing-marca">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <circle cx="6" cy="6" r="5" stroke="#185FA5" strokeWidth="1.2" />
+            <path d="M6 3.5V6L7.5 7.5" stroke="#185FA5" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+          Procesa tu quincena completa en menos de 10 minutos
+        </div>
+
         <p className="mb-4 text-sm font-medium uppercase tracking-wider text-landing-marca">
           Nómina para Centroamérica
         </p>
 
         <h1 className="font-serif text-3xl leading-tight text-landing-noche md:text-5xl md:leading-tight">
           ¿Cuánto te está costando tu planilla{" "}
-          <em className="not-italic" style={{ fontStyle: "italic" }}>
+          <em style={{ fontStyle: "italic" }}>
             sin que lo sepas?
           </em>
         </h1>
@@ -29,7 +39,7 @@ export function Hero() {
             Pruébalo gratis 30 días
           </Link>
           <Link
-            href="#solucion"
+            href="#como-funciona"
             className="inline-flex items-center text-sm font-medium text-landing-marca transition-colors hover:text-landing-noche"
           >
             Ver cómo funciona &rarr;

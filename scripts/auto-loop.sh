@@ -9,6 +9,13 @@
 cd "$(dirname "$0")/.." || exit 1
 echo $$ > .auto-loop.pid
 
+# Export .env.local into shell environment
+if [ -f .env.local ]; then
+  set -a
+  source <(grep -v '^\s*#' .env.local | grep '=')
+  set +a
+fi
+
 INTERVAL=3600  # 60 minutes in seconds
 LOG="auto-trade.log"
 

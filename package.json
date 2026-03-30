@@ -13,9 +13,12 @@
     "bot": "tsx scripts/run-bot.ts",
     "bot:momentum": "tsx scripts/run-bot.ts --strategy momentum",
     "bot:value": "tsx scripts/run-bot.ts --strategy value",
-    "bot:mean": "tsx scripts/run-bot.ts --strategy mean_reversion"
+    "bot:mean": "tsx scripts/run-bot.ts --strategy mean_reversion",
+    "scan": "tsx scripts/scan-markets.ts",
+    "scan:crypto": "tsx scripts/scan-markets.ts --category crypto"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-avatar": "^1.1.11",
     "@radix-ui/react-dialog": "^1.1.15",

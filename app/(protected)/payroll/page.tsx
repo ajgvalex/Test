@@ -230,6 +230,8 @@ export default function PayrollPage() {
           <StepApprove
             preview={preview}
             periodName={selectedPeriod?.name ?? ""}
+            periodStartDate={selectedPeriod?.start_date ?? ""}
+            periodEndDate={selectedPeriod?.end_date ?? ""}
             country={country as CountryCode}
             approving={isApproving}
             result={approvalResult}

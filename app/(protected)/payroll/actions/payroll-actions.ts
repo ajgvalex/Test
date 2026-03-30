@@ -44,6 +44,10 @@ export interface EmployeePayrollPreview {
   deductions: Record<string, number>;
   total_deductions: number;
   net_salary: number;
+  employer_contributions: Record<string, number>;
+  total_employer_contributions: number;
+  provisions: Record<string, number>;
+  total_provisions: number;
   employer_cost: number;
   has_override: boolean;
 }
@@ -54,6 +58,8 @@ export interface PayrollPreviewResult {
     gross: number;
     deductions: number;
     net: number;
+    employer_contributions: number;
+    provisions: number;
     employer_cost: number;
     employee_count: number;
   };
@@ -172,6 +178,17 @@ export async function calculatePayrollPreview(
         },
         total_deductions: result.deductions.total,
         net_salary: netSalary,
+        employer_contributions: {
+          "ISSS Patronal": result.employer_contributions.isss,
+          "AFP Patronal": result.employer_contributions.afp,
+          INSAFORP: result.employer_contributions.insaforp,
+        },
+        total_employer_contributions: result.employer_contributions.total,
+        provisions: {
+          Aguinaldo: result.provisions.aguinaldo,
+          Vacaciones: result.provisions.vacaciones,
+        },
+        total_provisions: result.provisions.total,
         employer_cost: result.employer_cost,
         has_override: hasOverride,
       });
@@ -212,6 +229,20 @@ export async function calculatePayrollPreview(
         },
         total_deductions: result.deductions.total,
         net_salary: netSalary,
+        employer_contributions: {
+          "IHSS E/M Patronal": result.employer_contributions.ihss_em,
+          "IHSS IVM Patronal": result.employer_contributions.ihss_ivm,
+          "RAP Patronal": result.employer_contributions.rap,
+          INFOP: result.employer_contributions.infop,
+        },
+        total_employer_contributions: result.employer_contributions.total,
+        provisions: {
+          Aguinaldo: result.provisions.aguinaldo,
+          "Décimo Cuarto": result.provisions.catorce,
+          Vacaciones: result.provisions.vacaciones,
+          Cesantía: result.provisions.cesantia,
+        },
+        total_provisions: result.provisions.total,
         employer_cost: result.employer_cost,
         has_override: hasOverride,
       });
@@ -222,6 +253,8 @@ export async function calculatePayrollPreview(
     gross: round2(entries.reduce((s, e) => s + e.gross_salary, 0)),
     deductions: round2(entries.reduce((s, e) => s + e.total_deductions, 0)),
     net: round2(entries.reduce((s, e) => s + e.net_salary, 0)),
+    employer_contributions: round2(entries.reduce((s, e) => s + e.total_employer_contributions, 0)),
+    provisions: round2(entries.reduce((s, e) => s + e.total_provisions, 0)),
     employer_cost: round2(entries.reduce((s, e) => s + e.employer_cost, 0)),
     employee_count: entries.length,
   };

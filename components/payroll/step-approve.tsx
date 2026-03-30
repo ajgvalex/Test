@@ -14,6 +14,7 @@ import type {
   PayrollPreviewResult,
   PayrollApprovalResult,
 } from "@/app/(protected)/payroll/actions/payroll-actions";
+import { generateZohoJournalCSV } from "@/lib/reports/zoho-journal";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,8 @@ import { Separator } from "@/components/ui/separator";
 interface StepApproveProps {
   preview: PayrollPreviewResult | null;
   periodName: string;
+  periodStartDate: string;
+  periodEndDate: string;
   country: CountryCode;
   approving: boolean;
   result: PayrollApprovalResult | null;
@@ -33,14 +36,44 @@ function fmt(amount: number, country: string) {
   return `${sym} ${amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
 }
 
+function downloadCsv(csv: string, filename: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function StepApprove({
   preview,
   periodName,
+  periodStartDate,
+  periodEndDate,
   country,
   approving,
   result,
   onApprove,
 }: StepApproveProps) {
+  function handleDownloadZohoCSV() {
+    if (!preview) return;
+    const currency = country === "SV" ? "USD" : "HNL";
+    // Build reference from period dates: NOM-YYYY-MM-QX
+    const endParts = periodEndDate.split("-");
+    const refNumber = `NOM-${endParts[0]}-${endParts[1]}`;
+    const csv = generateZohoJournalCSV(
+      preview.entries,
+      {
+        journalDate: periodEndDate,
+        referenceNumber: refNumber,
+        currency,
+        notes: `Nómina ${periodName}`,
+      },
+      country
+    );
+    downloadCsv(csv, `diario-contable-${refNumber}.csv`);
+  }
   if (result?.success) {
     return (
       <div className="space-y-6">
@@ -89,10 +122,18 @@ export function StepApprove({
         </div>
 
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="space-y-3 p-4">
             <Button variant="outline" className="w-full">
               <Download className="mr-2 h-4 w-4" />
               Descargar todos los recibos (PDF)
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={handleDownloadZohoCSV}
+            >
+              <FileText className="mr-2 h-4 w-4" />
+              Descargar Diario Contable (Zoho CSV)
             </Button>
           </CardContent>
         </Card>

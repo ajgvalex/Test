@@ -80,7 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         setCookie(COOKIE_NAME, JSON.stringify(authUser));
         setUser(authUser);
-        router.push("/");
+        router.push("/dashboard");
         return {};
       }
 

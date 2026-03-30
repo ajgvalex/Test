@@ -26,6 +26,15 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  --color-landing-noche: #042C53;
+  --color-landing-marca: #185FA5;
+  --color-landing-suave: #85B7EB;
+  --color-landing-hielo: #E6F1FB;
+  --color-landing-fondo: #F8FAFB;
+
+  --font-family-serif: "DM Serif Display", ui-serif, Georgia, serif;
+  --font-family-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
 }
 
 :root {

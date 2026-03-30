@@ -27,10 +27,12 @@ import { Chain, Side, OrderType, AssetType } from "@polymarket/clob-client/dist/
 // -----------------------------------------------------------------------------
 
 function loadEnvFile() {
-  // Try cwd first, then fall back to project root (one level up from scripts/)
+  // Try multiple strategies to find .env.local
+  const scriptDir = path.dirname(process.argv[1] ?? __filename);
   const candidates = [
     path.resolve(process.cwd(), ".env.local"),
-    path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", ".env.local"),
+    path.resolve(scriptDir, "..", ".env.local"),
+    path.resolve(scriptDir, ".env.local"),
   ];
   const envPath = candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
   try {
@@ -45,8 +47,8 @@ function loadEnvFile() {
       // Last value wins (allows appending overrides to .env.local)
       process.env[key] = value;
     }
-  } catch {
-    // .env.local not found, rely on exported vars
+  } catch (err) {
+    console.error(`Warning: Could not load .env.local (tried: ${candidates.join(", ")})`);
   }
 }
 

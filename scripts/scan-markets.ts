@@ -1,21 +1,47 @@
 #!/usr/bin/env npx tsx
 // =============================================================================
-// Polymarket Market Scanner - Sentiment & News Analysis
+// Polymarket Market Scanner - AI Sentiment Analysis
 // =============================================================================
 //
-// Scans active Polymarket markets, researches recent news for each one,
-// uses Claude to estimate the real probability, and suggests markets
-// where the price is mispriced (edge opportunities).
+// Scans active Polymarket markets, uses Claude to estimate the real
+// probability based on its knowledge, and suggests mispriced markets.
 //
 // Usage:
 //   npx tsx scripts/scan-markets.ts
-//   npx tsx scripts/scan-markets.ts --limit 10
-//   npx tsx scripts/scan-markets.ts --category crypto
-//   npx tsx scripts/scan-markets.ts --min-edge 0.10
+//   npx tsx scripts/scan-markets.ts --limit 20
+//   npx tsx scripts/scan-markets.ts --min-edge 0.05
 //
 // =============================================================================
 
+import * as fs from "fs";
+import * as path from "path";
 import Anthropic from "@anthropic-ai/sdk";
+
+// -----------------------------------------------------------------------------
+// Load .env.local automatically
+// -----------------------------------------------------------------------------
+
+function loadEnvFile() {
+  const envPath = path.resolve(process.cwd(), ".env.local");
+  try {
+    const content = fs.readFileSync(envPath, "utf-8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const value = trimmed.slice(eqIdx + 1).trim();
+      if (!process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  } catch {
+    // .env.local not found, rely on exported vars
+  }
+}
+
+loadEnvFile();
 
 // -----------------------------------------------------------------------------
 // CLI argument parsing
@@ -24,10 +50,9 @@ import Anthropic from "@anthropic-ai/sdk";
 function parseArgs() {
   const args = process.argv.slice(2);
   const opts = {
-    limit: 10,
-    minEdge: 0.08, // minimum 8% edge to suggest
-    category: "", // filter by category (optional)
-    balance: 50, // for position sizing
+    limit: 20,
+    minEdge: 0.05, // minimum 5% edge to suggest
+    balance: 50,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -40,10 +65,6 @@ function parseArgs() {
       case "-e":
         opts.minEdge = Number(args[++i]);
         break;
-      case "--category":
-      case "-c":
-        opts.category = args[++i];
-        break;
       case "--balance":
       case "-b":
         opts.balance = Number(args[++i]);
@@ -53,12 +74,11 @@ function parseArgs() {
         console.log(`
 Polymarket Market Scanner
 
-Analyzes active markets using AI sentiment analysis to find mispriced opportunities.
+Analyzes active markets using AI to find mispriced opportunities.
 
 Options:
-  --limit, -l      Number of markets to scan (default: 10)
-  --min-edge, -e   Minimum edge to show a suggestion, e.g. 0.10 = 10% (default: 0.08)
-  --category, -c   Filter by category: crypto, politics, sports, etc.
+  --limit, -l      Number of markets to fetch from API (default: 20)
+  --min-edge, -e   Minimum edge to show, e.g. 0.10 = 10% (default: 0.05)
   --balance, -b    Your balance for position sizing (default: 50)
   --help, -h       Show this help
 `);
@@ -74,6 +94,12 @@ Options:
 
 const API_BASE = process.env.POLYMARKET_API_URL ?? "https://clob.polymarket.com";
 
+interface ClobToken {
+  token_id: string;
+  outcome: string;
+  price?: number;
+}
+
 interface ClobMarket {
   condition_id: string;
   question: string;
@@ -82,11 +108,7 @@ interface ClobMarket {
   end_date_iso: string;
   active: boolean;
   closed: boolean;
-  tokens: { token_id: string; outcome: string; price: number }[];
-  volume_num_min: number;
-  liquidity_num_min: number;
-  tags?: string[];
-  category?: string;
+  tokens: ClobToken[];
 }
 
 async function fetchJson<T>(path: string, query?: Record<string, string>): Promise<T> {
@@ -104,7 +126,7 @@ async function fetchJson<T>(path: string, query?: Record<string, string>): Promi
 }
 
 async function getActiveMarkets(limit: number): Promise<ClobMarket[]> {
-  const data = await fetchJson<ClobMarket[] | { data: ClobMarket[] }>(
+  const data = await fetchJson<ClobMarket[] | { data: ClobMarket[]; next_cursor?: string }>(
     "/markets",
     { limit: String(limit), active: "true" },
   );
@@ -117,116 +139,106 @@ async function getMidpoint(tokenId: string): Promise<number> {
 }
 
 // -----------------------------------------------------------------------------
-// News search (DuckDuckGo HTML scraping)
+// Fetch prices for markets in batches
 // -----------------------------------------------------------------------------
 
-async function searchNews(query: string): Promise<string[]> {
-  try {
-    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query + " news 2026")}&t=h_&ia=web`;
-    const res = await fetch(searchUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-      },
-    });
+interface MarketWithPrice {
+  market: ClobMarket;
+  yesPrice: number;
+  noPrice: number;
+}
 
-    if (!res.ok) return [];
+async function enrichMarketPrices(markets: ClobMarket[]): Promise<MarketWithPrice[]> {
+  const results: MarketWithPrice[] = [];
 
-    const html = await res.text();
+  for (const market of markets) {
+    if (!market.tokens || market.tokens.length === 0 || market.closed) continue;
 
-    // Extract result snippets from DuckDuckGo HTML
-    const snippets: string[] = [];
-    const snippetRegex = /class="result__snippet"[^>]*>(.*?)<\/a>/gs;
-    let match;
-    while ((match = snippetRegex.exec(html)) !== null && snippets.length < 8) {
-      const text = match[1]
-        .replace(/<\/?[^>]+(>|$)/g, "") // strip HTML tags
-        .replace(/&amp;/g, "&")
-        .replace(/&quot;/g, '"')
-        .replace(/&#x27;/g, "'")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .trim();
-      if (text.length > 20) snippets.push(text);
+    const yesToken = market.tokens.find((t) => t.outcome === "Yes") ?? market.tokens[0];
+    const noToken = market.tokens.find((t) => t.outcome === "No") ?? market.tokens[1];
+
+    let yesPrice = yesToken?.price ?? 0;
+
+    // If price not in market data, fetch it
+    if (!yesPrice && yesToken?.token_id) {
+      try {
+        yesPrice = await getMidpoint(yesToken.token_id);
+        // Small delay to avoid rate limiting
+        await new Promise((r) => setTimeout(r, 200));
+      } catch {
+        continue;
+      }
     }
 
-    // Also extract titles
-    const titleRegex = /class="result__a"[^>]*>(.*?)<\/a>/gs;
-    const titles: string[] = [];
-    while ((match = titleRegex.exec(html)) !== null && titles.length < 8) {
-      const text = match[1].replace(/<\/?[^>]+(>|$)/g, "").trim();
-      if (text.length > 10) titles.push(text);
-    }
+    if (!yesPrice || yesPrice <= 0.02 || yesPrice >= 0.98) continue;
 
-    // Combine titles and snippets
-    const results: string[] = [];
-    for (let i = 0; i < Math.max(titles.length, snippets.length); i++) {
-      let entry = "";
-      if (titles[i]) entry += titles[i];
-      if (snippets[i]) entry += (entry ? ": " : "") + snippets[i];
-      if (entry) results.push(entry);
-    }
+    const noPrice = noToken?.price ?? 1 - yesPrice;
 
-    return results;
-  } catch {
-    return [];
+    results.push({ market, yesPrice, noPrice });
   }
+
+  return results;
 }
 
 // -----------------------------------------------------------------------------
-// Claude analysis
+// Claude batch analysis (analyze multiple markets in one call)
 // -----------------------------------------------------------------------------
 
 const anthropic = new Anthropic();
 
 interface MarketAnalysis {
+  question: string;
   estimatedProbability: number;
   confidence: "low" | "medium" | "high";
   reasoning: string;
   keyFactors: string[];
-  sentiment: "bullish" | "bearish" | "neutral";
 }
 
-async function analyzeMarket(
-  question: string,
-  description: string,
-  currentPrice: number,
-  newsSnippets: string[],
-): Promise<MarketAnalysis> {
-  const newsContext =
-    newsSnippets.length > 0
-      ? `Recent news and information:\n${newsSnippets.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
-      : "No recent news found for this market.";
+async function analyzeMarketBatch(
+  markets: { question: string; description: string; yesPrice: number }[],
+): Promise<MarketAnalysis[]> {
+  const marketList = markets
+    .map(
+      (m, i) =>
+        `MARKET ${i + 1}:
+  Question: ${m.question}
+  Description: ${m.description.substring(0, 200)}
+  Current YES price: ${(m.yesPrice * 100).toFixed(1)}%`,
+    )
+    .join("\n\n");
 
   const response = await anthropic.messages.create({
     model: "claude-haiku-4-5-20251001",
-    max_tokens: 500,
+    max_tokens: 4000,
     messages: [
       {
         role: "user",
-        content: `You are a prediction market analyst. Analyze this Polymarket question and estimate the TRUE probability of the event happening.
+        content: `You are an expert prediction market analyst. Today is ${new Date().toISOString().slice(0, 10)}.
 
-MARKET QUESTION: ${question}
+Analyze each market below. For each one, estimate the TRUE probability of YES happening based on your knowledge of current events, historical patterns, and any relevant context.
 
-DESCRIPTION: ${description}
+IMPORTANT RULES:
+- Do NOT just echo the market price. Use your own independent judgment.
+- If you think the market is correct, say so, but still give your own estimate.
+- Be bold: prediction markets are often wrong, especially on less liquid markets.
+- Use "medium" or "high" confidence when you have genuine knowledge about the topic.
+- Only use "low" confidence when the topic is truly obscure or unknowable.
+- Your estimates should be based on real-world knowledge, not on what the market says.
 
-CURRENT MARKET PRICE: ${(currentPrice * 100).toFixed(1)}% (this is what the market currently thinks)
+${marketList}
 
-${newsContext}
+Respond with ONLY a JSON array (no markdown, no backticks, no explanation outside the array):
+[
+  {
+    "question": "exact question text",
+    "estimatedProbability": 0.XX,
+    "confidence": "low|medium|high",
+    "reasoning": "1-2 sentences explaining your estimate",
+    "keyFactors": ["factor1", "factor2"]
+  }
+]
 
-Respond ONLY with valid JSON in this exact format (no markdown, no explanation outside JSON):
-{
-  "estimatedProbability": 0.XX,
-  "confidence": "low|medium|high",
-  "reasoning": "1-2 sentence explanation",
-  "keyFactors": ["factor1", "factor2", "factor3"],
-  "sentiment": "bullish|bearish|neutral"
-}
-
-Rules:
-- estimatedProbability must be between 0.01 and 0.99
-- Be honest about uncertainty - use "low" confidence when unsure
-- Consider the news sentiment, historical context, and current events
-- "bullish" means YES is more likely, "bearish" means NO is more likely`,
+You MUST return one entry for each market, in the same order.`,
       },
     ],
   });
@@ -235,15 +247,12 @@ Rules:
     response.content[0].type === "text" ? response.content[0].text : "";
 
   try {
-    return JSON.parse(text) as MarketAnalysis;
+    // Handle potential markdown wrapping
+    const cleaned = text.replace(/^```json?\s*/, "").replace(/\s*```$/, "").trim();
+    return JSON.parse(cleaned) as MarketAnalysis[];
   } catch {
-    return {
-      estimatedProbability: currentPrice,
-      confidence: "low",
-      reasoning: "Could not parse analysis",
-      keyFactors: [],
-      sentiment: "neutral",
-    };
+    console.error(`  ${RED}Failed to parse Claude response${RESET}`);
+    return [];
   }
 }
 
@@ -251,24 +260,22 @@ Rules:
 // Kelly Criterion position sizing
 // -----------------------------------------------------------------------------
 
-function kellyBet(estimatedProb: number, marketPrice: number, balance: number): {
-  fraction: number;
-  suggestedBet: number;
-  side: "YES" | "NO";
-} {
-  // Determine which side to bet
+function kellyBet(
+  estimatedProb: number,
+  marketPrice: number,
+  balance: number,
+): { fraction: number; suggestedBet: number; side: "YES" | "NO" } {
   const buyYes = estimatedProb > marketPrice;
   const p = buyYes ? estimatedProb : 1 - estimatedProb;
   const price = buyYes ? marketPrice : 1 - marketPrice;
 
-  // Kelly: f* = (bp - q) / b where b = (1/price - 1)
   const b = 1 / price - 1;
   const q = 1 - p;
   const kelly = (b * p - q) / b;
 
-  // Use quarter-Kelly for safety
+  // Quarter-Kelly for safety, capped at 15% of balance
   const fraction = Math.max(0, kelly * 0.25);
-  const suggestedBet = Math.min(fraction * balance, balance * 0.15); // cap at 15% of balance
+  const suggestedBet = Math.min(fraction * balance, balance * 0.15);
 
   return {
     fraction,
@@ -306,109 +313,123 @@ function log(msg: string) {
 // Main
 // -----------------------------------------------------------------------------
 
-interface Opportunity {
-  question: string;
-  marketPrice: number;
-  estimatedProb: number;
-  edge: number;
-  side: "YES" | "NO";
-  suggestedBet: number;
-  confidence: string;
-  reasoning: string;
-  keyFactors: string[];
-  sentiment: string;
-  conditionId: string;
-}
-
 async function main() {
   const opts = parseArgs();
 
+  // Validate API key
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error(
+      `${RED}Error: ANTHROPIC_API_KEY not set.${RESET}\n` +
+        `Either export it: export ANTHROPIC_API_KEY=sk-ant-...\n` +
+        `Or add it to .env.local`,
+    );
+    process.exit(1);
+  }
+
   logHeader("Polymarket Market Scanner");
-  log(`Scanning ${BOLD}${opts.limit}${RESET} markets for opportunities...`);
+  log(`Fetching up to ${BOLD}${opts.limit}${RESET} markets`);
   log(`Min edge: ${BOLD}${(opts.minEdge * 100).toFixed(0)}%${RESET}`);
   log(`Balance: ${BOLD}$${opts.balance}${RESET}`);
-  if (opts.category) log(`Category filter: ${BOLD}${opts.category}${RESET}`);
   console.log();
 
   // 1. Fetch markets
   log("Fetching active markets from Polymarket...");
-  const markets = await getActiveMarkets(opts.limit);
-  log(`Found ${BOLD}${markets.length}${RESET} markets`);
+  const rawMarkets = await getActiveMarkets(opts.limit);
+  log(`API returned ${BOLD}${rawMarkets.length}${RESET} markets`);
 
-  if (markets.length === 0) {
-    log(`${RED}No active markets found.${RESET}`);
+  // 2. Get prices for each market
+  log("Fetching current prices...");
+  const marketsWithPrices = await enrichMarketPrices(rawMarkets);
+  log(
+    `${BOLD}${marketsWithPrices.length}${RESET} markets with valid prices (${rawMarkets.length - marketsWithPrices.length} skipped)`,
+  );
+
+  if (marketsWithPrices.length === 0) {
+    log(`${RED}No markets with valid prices found.${RESET}`);
     return;
   }
 
-  // 2. Filter markets
-  let filtered = markets.filter(
-    (m) => m.tokens && m.tokens.length > 0 && !m.closed,
-  );
+  // 3. Analyze markets in batches with Claude
+  const BATCH_SIZE = 8;
+  const allAnalyses: {
+    analysis: MarketAnalysis;
+    market: ClobMarket;
+    yesPrice: number;
+  }[] = [];
 
-  if (opts.category) {
-    const cat = opts.category.toLowerCase();
-    filtered = filtered.filter(
-      (m) =>
-        m.category?.toLowerCase().includes(cat) ||
-        m.tags?.some((t) => t.toLowerCase().includes(cat)),
+  for (let batchStart = 0; batchStart < marketsWithPrices.length; batchStart += BATCH_SIZE) {
+    const batch = marketsWithPrices.slice(batchStart, batchStart + BATCH_SIZE);
+    const batchNum = Math.floor(batchStart / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(marketsWithPrices.length / BATCH_SIZE);
+
+    log(
+      `Analyzing batch ${BOLD}${batchNum}/${totalBatches}${RESET} (${batch.length} markets) with Claude...`,
     );
+
+    const batchInput = batch.map((m) => ({
+      question: m.market.question,
+      description: m.market.description ?? "",
+      yesPrice: m.yesPrice,
+    }));
+
+    const analyses = await analyzeMarketBatch(batchInput);
+
+    for (let j = 0; j < analyses.length && j < batch.length; j++) {
+      allAnalyses.push({
+        analysis: analyses[j],
+        market: batch[j].market,
+        yesPrice: batch[j].yesPrice,
+      });
+    }
   }
 
-  log(`Analyzing ${BOLD}${filtered.length}${RESET} markets...\n`);
+  // 4. Calculate edge and filter opportunities
+  interface Opportunity {
+    question: string;
+    marketPrice: number;
+    estimatedProb: number;
+    edge: number;
+    side: "YES" | "NO";
+    suggestedBet: number;
+    confidence: string;
+    reasoning: string;
+    keyFactors: string[];
+    conditionId: string;
+  }
 
   const opportunities: Opportunity[] = [];
 
-  // 3. Analyze each market
-  for (let i = 0; i < filtered.length; i++) {
-    const market = filtered[i];
-    const token = market.tokens[0];
-    const tokenId = token.token_id;
+  console.log(`\n${BOLD}  All Markets Analyzed:${RESET}\n`);
 
-    // Get current price
-    let currentPrice: number;
-    try {
-      currentPrice = token.price || (await getMidpoint(tokenId));
-    } catch {
-      continue;
-    }
+  for (const { analysis, market, yesPrice } of allAnalyses) {
+    const edge = Math.abs(analysis.estimatedProbability - yesPrice);
+    const kelly = kellyBet(analysis.estimatedProbability, yesPrice, opts.balance);
+    const isOpportunity = edge >= opts.minEdge && analysis.confidence !== "low";
 
-    if (!currentPrice || currentPrice <= 0.02 || currentPrice >= 0.98) continue;
+    const edgeColor = isOpportunity ? GREEN : DIM;
+    const confColor =
+      analysis.confidence === "high"
+        ? GREEN
+        : analysis.confidence === "medium"
+          ? YELLOW
+          : DIM;
 
     const shortQ =
-      market.question.length > 65
-        ? market.question.substring(0, 65) + "..."
+      market.question.length > 50
+        ? market.question.substring(0, 50) + "..."
         : market.question;
 
-    process.stdout.write(
-      `${DIM}[${i + 1}/${filtered.length}]${RESET} ${shortQ} `,
-    );
-
-    // Search for news
-    const searchQuery = market.question.replace(/^Will\s+/i, "").replace(/\?$/, "");
-    const news = await searchNews(searchQuery);
-
-    // Analyze with Claude
-    const analysis = await analyzeMarket(
-      market.question,
-      market.description ?? "",
-      currentPrice,
-      news,
-    );
-
-    // Calculate edge
-    const edge = Math.abs(analysis.estimatedProbability - currentPrice);
-    const kelly = kellyBet(analysis.estimatedProbability, currentPrice, opts.balance);
-
-    // Show inline result
-    const edgeColor = edge >= opts.minEdge ? GREEN : DIM;
     console.log(
-      `${edgeColor}${(edge * 100).toFixed(1)}% edge${RESET} ${DIM}(${analysis.confidence} conf)${RESET}`,
+      `  ${isOpportunity ? BOLD : ""}${shortQ}${RESET}`,
+    );
+    console.log(
+      `    Market: ${(yesPrice * 100).toFixed(0)}% | AI: ${(analysis.estimatedProbability * 100).toFixed(0)}% | Edge: ${edgeColor}${(edge * 100).toFixed(1)}%${RESET} | Conf: ${confColor}${analysis.confidence}${RESET}`,
     );
 
-    if (edge >= opts.minEdge && analysis.confidence !== "low") {
+    if (isOpportunity) {
       opportunities.push({
         question: market.question,
-        marketPrice: currentPrice,
+        marketPrice: yesPrice,
         estimatedProb: analysis.estimatedProbability,
         edge,
         side: kelly.side,
@@ -416,33 +437,28 @@ async function main() {
         confidence: analysis.confidence,
         reasoning: analysis.reasoning,
         keyFactors: analysis.keyFactors,
-        sentiment: analysis.sentiment,
         conditionId: market.condition_id,
       });
     }
-
-    // Small delay to avoid rate limiting
-    await new Promise((r) => setTimeout(r, 300));
   }
 
-  // 4. Sort by edge (best first)
+  // 5. Sort and display opportunities
   opportunities.sort((a, b) => b.edge - a.edge);
 
-  // 5. Display results
-  logHeader("Opportunities Found");
+  logHeader("Suggested Opportunities");
 
   if (opportunities.length === 0) {
     console.log(
-      `  ${YELLOW}No opportunities found with >= ${(opts.minEdge * 100).toFixed(0)}% edge and medium+ confidence.${RESET}`,
+      `  ${YELLOW}No opportunities with >= ${(opts.minEdge * 100).toFixed(0)}% edge and medium+ confidence.${RESET}`,
     );
     console.log(
-      `  ${DIM}Try lowering --min-edge or scanning more markets with --limit${RESET}\n`,
+      `  ${DIM}Try: --min-edge 0.03 or --limit 30${RESET}\n`,
     );
     return;
   }
 
   console.log(
-    `  Found ${BOLD}${GREEN}${opportunities.length}${RESET} opportunities:\n`,
+    `  ${GREEN}${BOLD}${opportunities.length} opportunities found:${RESET}\n`,
   );
 
   for (let i = 0; i < opportunities.length; i++) {
@@ -450,47 +466,28 @@ async function main() {
     const edgeColor = opp.edge >= 0.15 ? GREEN : YELLOW;
     const sideColor = opp.side === "YES" ? GREEN : RED;
 
+    console.log(`  ${BOLD}${WHITE}${i + 1}. ${opp.question}${RESET}`);
     console.log(
-      `  ${BOLD}${WHITE}${i + 1}. ${opp.question}${RESET}`,
+      `     Market: ${(opp.marketPrice * 100).toFixed(1)}%  |  AI estimate: ${(opp.estimatedProb * 100).toFixed(1)}%  |  Edge: ${edgeColor}${BOLD}${(opp.edge * 100).toFixed(1)}%${RESET}`,
     );
     console.log(
-      `     ${DIM}Market says:${RESET} ${(opp.marketPrice * 100).toFixed(1)}%  ${DIM}|  AI estimate:${RESET} ${(opp.estimatedProb * 100).toFixed(1)}%  ${DIM}|  Edge:${RESET} ${edgeColor}${BOLD}${(opp.edge * 100).toFixed(1)}%${RESET}`,
+      `     Buy ${sideColor}${BOLD}${opp.side}${RESET}  |  Bet: ${GREEN}$${opp.suggestedBet.toFixed(2)}${RESET}  |  Confidence: ${opp.confidence}`,
     );
-    console.log(
-      `     ${DIM}Action:${RESET} Buy ${sideColor}${BOLD}${opp.side}${RESET} ${DIM}|  Suggested bet:${RESET} ${GREEN}$${opp.suggestedBet.toFixed(2)}${RESET} ${DIM}|  Confidence:${RESET} ${opp.confidence}`,
-    );
-    console.log(`     ${DIM}Reasoning:${RESET} ${opp.reasoning}`);
+    console.log(`     ${DIM}${opp.reasoning}${RESET}`);
     if (opp.keyFactors.length > 0) {
-      console.log(
-        `     ${DIM}Key factors:${RESET} ${opp.keyFactors.join(" | ")}`,
-      );
+      console.log(`     ${DIM}Factors: ${opp.keyFactors.join(" | ")}${RESET}`);
     }
     console.log();
   }
 
   // 6. Summary
-  console.log(`${BOLD}${MAGENTA}${"─".repeat(70)}${RESET}`);
-  console.log(`${BOLD}${MAGENTA}  Summary${RESET}`);
-  console.log(`${BOLD}${MAGENTA}${"─".repeat(70)}${RESET}`);
-  const totalSuggested = opportunities.reduce(
-    (sum, o) => sum + o.suggestedBet,
-    0,
-  );
-  console.log(`  Markets scanned:      ${filtered.length}`);
-  console.log(
-    `  Opportunities found:  ${GREEN}${opportunities.length}${RESET}`,
-  );
-  console.log(`  Total suggested bet:  $${totalSuggested.toFixed(2)} of $${opts.balance}`);
-  console.log(
-    `  Best edge:            ${GREEN}${(opportunities[0].edge * 100).toFixed(1)}%${RESET} on "${opportunities[0].question.substring(0, 50)}..."`,
-  );
+  const totalSuggested = opportunities.reduce((s, o) => s + o.suggestedBet, 0);
+  console.log(`${MAGENTA}${"─".repeat(70)}${RESET}`);
+  console.log(`  Scanned: ${allAnalyses.length} markets`);
+  console.log(`  Opportunities: ${GREEN}${opportunities.length}${RESET}`);
+  console.log(`  Total suggested: $${totalSuggested.toFixed(2)} of $${opts.balance}`);
   console.log();
-  console.log(
-    `  ${YELLOW}${BOLD}DISCLAIMER:${RESET} ${YELLOW}This is AI analysis, not financial advice.${RESET}`,
-  );
-  console.log(
-    `  ${YELLOW}Always do your own research before placing bets.${RESET}\n`,
-  );
+  console.log(`  ${YELLOW}${BOLD}DISCLAIMER:${RESET} ${YELLOW}AI analysis, not financial advice. DYOR.${RESET}\n`);
 }
 
 main().catch((err) => {

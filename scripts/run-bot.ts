@@ -29,7 +29,7 @@ function parseArgs() {
     interval: 30, // seconds between ticks
     maxPositionSize: 10,
     maxDailyLoss: 5,
-    limit: 10, // number of markets to scan
+    limit: 5, // number of markets to scan
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -304,17 +304,25 @@ async function main() {
       // 3. Analyze each market
       console.log(`\n${BOLD}  Signals:${RESET}`);
       let signalCount = 0;
+      let skippedCount = 0;
 
       for (const market of markets) {
         if (!market.tokens || market.tokens.length === 0) continue;
 
         const token = market.tokens[0];
         const tokenId = token.token_id;
-        const currentPrice = token.price;
 
-        if (!tokenId || currentPrice <= 0 || currentPrice >= 1) continue;
+        if (!tokenId) continue;
 
         try {
+          // Fetch the current price (not included in /markets response)
+          const currentPrice = token.price || (await getMidpoint(tokenId));
+
+          if (!currentPrice || currentPrice <= 0.01 || currentPrice >= 0.99) {
+            skippedCount++;
+            continue;
+          }
+
           // Fetch order book
           const orderBook = await getOrderBook(tokenId);
 
@@ -424,7 +432,9 @@ async function main() {
       }
 
       if (signalCount === 0) {
-        log(`${DIM}No markets with valid data to analyze${RESET}`);
+        log(`${DIM}No markets with valid data to analyze (${skippedCount} skipped)${RESET}`);
+      } else {
+        log(`Analyzed ${signalCount} markets (${skippedCount} skipped)`);
       }
 
       // 4. Check stop-losses on existing positions

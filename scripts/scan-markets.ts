@@ -56,11 +56,15 @@ function parseArgs() {
   const args = process.argv.slice(2);
   const opts = {
     limit: 100,
-    minEdge: 0.05, // minimum 5% edge to suggest
+    minEdge: 0.05,
     balance: 50,
-    minBet: 1,     // minimum bet amount in USD
-    minReturn: 0,  // minimum expected return % (e.g. 0.30 = 30%)
-    minConf: "low" as "low" | "medium" | "high", // minimum confidence level
+    minBet: 1,
+    minReturn: 0,
+    minConf: "low" as "low" | "medium" | "high",
+    auto: false,         // auto-execute trades without prompting
+    aggressive: false,   // aggressive Kelly sizing
+    maxTrades: 5,        // max trades per run in auto mode
+    maxPerTrade: 0,      // max USD per trade (0 = no cap, use Kelly)
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -82,11 +86,23 @@ function parseArgs() {
         break;
       case "--min-return":
       case "-r":
-        opts.minReturn = Number(args[++i]) / 100; // user enters 30, we store 0.30
+        opts.minReturn = Number(args[++i]) / 100;
         break;
       case "--min-conf":
       case "-c":
         opts.minConf = args[++i] as "low" | "medium" | "high";
+        break;
+      case "--auto":
+        opts.auto = true;
+        break;
+      case "--aggressive":
+        opts.aggressive = true;
+        break;
+      case "--max-trades":
+        opts.maxTrades = Number(args[++i]);
+        break;
+      case "--max-per-trade":
+        opts.maxPerTrade = Number(args[++i]);
         break;
       case "--help":
       case "-h":
@@ -95,18 +111,23 @@ Polymarket Market Scanner
 
 Analyzes active markets using AI to find mispriced opportunities.
 
-Options:
-  --limit, -l      Number of markets to fetch (default: 100)
-  --min-edge, -e   Minimum edge %, e.g. 10 = 10% (default: 5)
-  --balance, -b    Your balance for position sizing (default: 50)
-  --min-bet        Minimum suggested bet in USD (default: 1)
-  --min-return, -r Expected return %, e.g. 30 = 30% (default: 0)
-  --min-conf, -c   Minimum confidence: low, medium, high (default: low)
-  --help, -h       Show this help
+Filters:
+  --limit, -l        Number of markets to fetch (default: 100)
+  --min-edge, -e     Minimum edge % (default: 5)
+  --min-return, -r   Expected return % (default: 0)
+  --min-conf, -c     Minimum confidence: low, medium, high (default: low)
+  --min-bet          Minimum bet in USD (default: 1)
+  --balance, -b      Balance for sizing (default: 50)
+
+Auto-trade mode:
+  --auto             Execute best trades automatically (no prompts)
+  --aggressive       Use half-Kelly sizing + 30% cap (vs quarter-Kelly + 15%)
+  --max-trades       Max trades per run (default: 5)
+  --max-per-trade    Max USD per single trade (default: no cap)
 
 Examples:
-  npx tsx scripts/scan-markets.ts --min-bet 5 --min-return 30 --min-conf medium
-  npx tsx scripts/scan-markets.ts -e 10 -r 50 -c high
+  npx tsx scripts/scan-markets.ts --min-bet 5 -r 30 -c medium
+  npx tsx scripts/scan-markets.ts --auto --aggressive -r 20 -c medium --max-trades 3
 `);
         process.exit(0);
     }
@@ -478,6 +499,7 @@ function kellyBet(
   estimatedProb: number,
   marketPrice: number,
   balance: number,
+  aggressive = false,
 ): { fraction: number; suggestedBet: number; side: "YES" | "NO" } {
   const buyYes = estimatedProb > marketPrice;
   const p = buyYes ? estimatedProb : 1 - estimatedProb;
@@ -487,9 +509,12 @@ function kellyBet(
   const q = 1 - p;
   const kelly = (b * p - q) / b;
 
-  // Quarter-Kelly for safety, capped at 15% of balance, minimum $1 (Polymarket min)
-  const fraction = Math.max(0, kelly * 0.25);
-  let suggestedBet = Math.min(fraction * balance, balance * 0.15);
+  // Aggressive: half-Kelly, cap 30% | Normal: quarter-Kelly, cap 15%
+  const kellyFraction = aggressive ? 0.5 : 0.25;
+  const balanceCap = aggressive ? 0.30 : 0.15;
+
+  const fraction = Math.max(0, kelly * kellyFraction);
+  let suggestedBet = Math.min(fraction * balance, balance * balanceCap);
   suggestedBet = Math.round(suggestedBet * 100) / 100;
   if (suggestedBet > 0 && suggestedBet < 1) suggestedBet = 1; // Polymarket minimum
 
@@ -542,10 +567,14 @@ async function main() {
     process.exit(1);
   }
 
+  const modeLabel = opts.auto
+    ? `${RED}${BOLD}AUTO-TRADE${RESET}${opts.aggressive ? ` ${YELLOW}AGGRESSIVE${RESET}` : ""}`
+    : "interactive";
   logHeader("Polymarket Market Scanner");
+  log(`Mode: ${modeLabel}`);
   log(`Fetching up to ${BOLD}${opts.limit}${RESET} markets`);
   log(`Min edge: ${BOLD}${(opts.minEdge * 100).toFixed(0)}%${RESET} | Min return: ${BOLD}${(opts.minReturn * 100).toFixed(0)}%${RESET} | Min bet: ${BOLD}$${opts.minBet}${RESET} | Min confidence: ${BOLD}${opts.minConf}${RESET}`);
-  log(`Balance: ${BOLD}$${opts.balance}${RESET}`);
+  log(`Balance: ${BOLD}$${opts.balance}${RESET}${opts.aggressive ? ` | Kelly: ${YELLOW}half-Kelly (aggressive)${RESET}` : ""}`);
   console.log();
 
   // 1. Fetch open markets from Gamma API (popular, active markets with prices)
@@ -633,7 +662,7 @@ async function main() {
 
   for (const { analysis, market, yesPrice } of allAnalyses) {
     const edge = Math.abs(analysis.estimatedProbability - yesPrice);
-    const kelly = kellyBet(analysis.estimatedProbability, yesPrice, opts.balance);
+    const kelly = kellyBet(analysis.estimatedProbability, yesPrice, opts.balance, opts.aggressive);
 
     // Expected return: if you buy at marketPrice and true prob is estimatedProb
     const buyPrice = kelly.side === "YES" ? yesPrice : 1 - yesPrice;
@@ -752,14 +781,18 @@ async function main() {
   console.log(`  ${DIM}Analysis based on: real-time news, geopolitical context, sentiment analysis${RESET}`);
   console.log(`  ${YELLOW}${BOLD}DISCLAIMER:${RESET} ${YELLOW}AI analysis, not financial advice. DYOR.${RESET}\n`);
 
-  // 8. Interactive trade execution
+  // 8. Trade execution
   const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
   if (!privateKey) {
     log(`${DIM}Set POLYMARKET_PRIVATE_KEY in .env.local to enable trade execution.${RESET}`);
     return;
   }
 
-  await interactiveTradeFlow(opportunities, marketsWithPrices);
+  if (opts.auto) {
+    await autoTradeFlow(opportunities, marketsWithPrices, opts);
+  } else {
+    await interactiveTradeFlow(opportunities, marketsWithPrices);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -777,6 +810,144 @@ function ask(question: string): Promise<string> {
       resolve(answer.trim());
     });
   });
+}
+
+// -----------------------------------------------------------------------------
+// Auto trade flow - executes best opportunities without prompting
+// -----------------------------------------------------------------------------
+
+async function autoTradeFlow(
+  opportunities: Opportunity[],
+  marketsWithPrices: MarketWithPrice[],
+  opts: { maxTrades: number; maxPerTrade: number; aggressive: boolean },
+) {
+  logHeader("AUTO-TRADE MODE");
+
+  if (opportunities.length === 0) {
+    log(`${YELLOW}No opportunities to trade. Exiting.${RESET}`);
+    return;
+  }
+
+  // Sort by expected return (best first), then by confidence
+  const confRank = { low: 0, medium: 1, high: 2 };
+  const sorted = [...opportunities].sort((a, b) => {
+    // Prioritize high confidence + high return
+    const scoreA = a.expectedReturn * (1 + confRank[a.confidence as keyof typeof confRank]);
+    const scoreB = b.expectedReturn * (1 + confRank[b.confidence as keyof typeof confRank]);
+    return scoreB - scoreA;
+  });
+
+  // Take top N
+  const selected = sorted.slice(0, opts.maxTrades);
+
+  log(`Selected ${BOLD}${selected.length}${RESET} best trades (of ${opportunities.length} opportunities):`);
+  console.log();
+
+  // Build trade list
+  interface TradeToExecute {
+    opportunity: Opportunity;
+    amount: number;
+    tokenId: string;
+  }
+  const trades: TradeToExecute[] = [];
+
+  for (const opp of selected) {
+    let amount = opp.suggestedBet;
+    if (opts.maxPerTrade > 0) amount = Math.min(amount, opts.maxPerTrade);
+    if (amount < 1) amount = 1;
+
+    const marketData = marketsWithPrices.find(
+      (m) => m.market.condition_id === opp.conditionId,
+    );
+    if (!marketData) continue;
+
+    const tokenForSide =
+      opp.side === "YES"
+        ? marketData.market.tokens.find((t) => t.outcome === "Yes") ?? marketData.market.tokens[0]
+        : marketData.market.tokens.find((t) => t.outcome === "No") ?? marketData.market.tokens[1];
+    if (!tokenForSide) continue;
+
+    trades.push({ opportunity: opp, amount, tokenId: tokenForSide.token_id });
+
+    const sideColor = opp.side === "YES" ? GREEN : RED;
+    const returnColor = opp.expectedReturn >= 0.5 ? GREEN : YELLOW;
+    console.log(
+      `  ${sideColor}${BOLD}${opp.side}${RESET} $${amount.toFixed(2)} | Return: ${returnColor}${BOLD}${(opp.expectedReturn * 100).toFixed(0)}%${RESET} | ${opp.confidence} | ${opp.question.substring(0, 55)}`,
+    );
+  }
+
+  const totalCost = trades.reduce((s, t) => s + t.amount, 0);
+  console.log(`\n  ${BOLD}Total: $${totalCost.toFixed(2)}${RESET}\n`);
+
+  // Initialize client and execute
+  log("Initializing Polymarket client...");
+  let clobClient: ClobClient;
+  try {
+    clobClient = await initClobClient();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`${RED}Failed to initialize client: ${msg}${RESET}`);
+    return;
+  }
+
+  // Pre-flight
+  try {
+    const balanceAllowance = await clobClient.getBalanceAllowance({
+      asset_type: AssetType.COLLATERAL,
+    });
+    const usdcBalance = parseFloat(balanceAllowance.balance) / 1_000_000;
+    log(`  USDC Balance: ${GREEN}$${usdcBalance.toFixed(2)}${RESET}`);
+
+    if (usdcBalance < totalCost) {
+      log(`  ${YELLOW}WARNING: Balance $${usdcBalance.toFixed(2)} < Total $${totalCost.toFixed(2)}. Reducing bets.${RESET}`);
+      // Scale down proportionally
+      const scale = (usdcBalance * 0.95) / totalCost; // keep 5% buffer
+      for (const t of trades) {
+        t.amount = Math.max(1, Math.round(t.amount * scale * 100) / 100);
+      }
+    }
+  } catch {
+    log(`  ${YELLOW}Could not check balance, proceeding anyway${RESET}`);
+  }
+
+  try {
+    await clobClient.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+  } catch { /* ignore */ }
+
+  // Execute each trade
+  let successCount = 0;
+  for (const trade of trades) {
+    const opp = trade.opportunity;
+    const shortQ = opp.question.length > 45 ? opp.question.substring(0, 45) + "..." : opp.question;
+
+    log(`Placing: ${opp.side} "${shortQ}" | $${trade.amount.toFixed(2)}`);
+
+    try {
+      const signedOrder = await clobClient.createMarketOrder({
+        tokenID: trade.tokenId,
+        amount: trade.amount,
+        side: Side.BUY,
+      });
+
+      const result = await clobClient.postOrder(signedOrder, OrderType.FOK);
+      const response = typeof result === "string" ? JSON.parse(result) : result;
+      const status = response?.status ?? "unknown";
+
+      if (status === "matched" || status === "delayed" || response?.success) {
+        log(`  ${GREEN}${BOLD}OK${RESET} (${status}) ${DIM}${response?.orderID ?? ""}${RESET}`);
+        successCount++;
+      } else {
+        log(`  ${YELLOW}${status}${RESET}: ${JSON.stringify(response).substring(0, 150)}`);
+      }
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`  ${RED}ERROR: ${msg.substring(0, 150)}${RESET}`);
+    }
+  }
+
+  console.log();
+  log(`${GREEN}${BOLD}Auto-trade complete: ${successCount}/${trades.length} trades executed${RESET}`);
+  log(`Check positions at polymarket.com/portfolio`);
 }
 
 // -----------------------------------------------------------------------------

@@ -466,13 +466,15 @@ function kellyBet(
   const q = 1 - p;
   const kelly = (b * p - q) / b;
 
-  // Quarter-Kelly for safety, capped at 15% of balance
+  // Quarter-Kelly for safety, capped at 15% of balance, minimum $1 (Polymarket min)
   const fraction = Math.max(0, kelly * 0.25);
-  const suggestedBet = Math.min(fraction * balance, balance * 0.15);
+  let suggestedBet = Math.min(fraction * balance, balance * 0.15);
+  suggestedBet = Math.round(suggestedBet * 100) / 100;
+  if (suggestedBet > 0 && suggestedBet < 1) suggestedBet = 1; // Polymarket minimum
 
   return {
     fraction,
-    suggestedBet: Math.round(suggestedBet * 100) / 100,
+    suggestedBet,
     side: buyYes ? "YES" : "NO",
   };
 }
@@ -878,8 +880,8 @@ async function interactiveTradeFlow(
     if (amountStr.toLowerCase() === "skip") continue;
 
     const amount = parseFloat(amountStr);
-    if (isNaN(amount) || amount <= 0) {
-      console.log(`  ${RED}Invalid amount, skipping.${RESET}`);
+    if (isNaN(amount) || amount < 1) {
+      console.log(`  ${RED}Invalid amount (minimum $1), skipping.${RESET}`);
       continue;
     }
 

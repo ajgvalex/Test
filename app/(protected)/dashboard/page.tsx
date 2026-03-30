@@ -38,7 +38,7 @@ export default function Home() {
     <div className="container mx-auto px-4 py-8">
       <div className="mb-10">
         <h1 className="text-3xl font-bold tracking-tight">
-          Bienvenido a PayrollApp
+          Bienvenido a Planilla
         </h1>
         <p className="mt-2 text-muted-foreground">
           {user?.company_name

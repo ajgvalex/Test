@@ -95,8 +95,8 @@ const PERIOD_END = "2026-03-15";
 const PAYMENT_DATE = "2026-03-15";
 
 const COMPANY = {
-  name: "PayrollApp Demo",
-  legalName: "PayrollApp S.A. de C.V.",
+  name: "Planilla Demo",
+  legalName: "Planilla S.A. de C.V.",
   taxId: "0801-9999-00001",
   address: "Tegucigalpa, Honduras",
 };

@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { DollarSign } from "lucide-react";
 
 import { useAuth } from "@/lib/auth/auth-context";
 import { IS_MOCK_AUTH } from "@/lib/auth/config";
+import { PlanillaLogo } from "@/components/landing/logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 
 export default function LoginPage() {
   const { signIn } = useAuth();
@@ -31,13 +31,10 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
       <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <DollarSign className="h-6 w-6" />
-          </div>
-          <CardTitle className="text-xl">PayrollApp</CardTitle>
+        <CardHeader className="flex flex-col items-center gap-2 text-center">
+          <PlanillaLogo />
           <p className="text-sm text-muted-foreground">
-            Inicia sesión para continuar
+            Inicia sesion para continuar
           </p>
         </CardHeader>
         <CardContent>

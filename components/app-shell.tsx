@@ -9,13 +9,14 @@ import {
   BarChart3,
   Menu,
   X,
-  DollarSign,
+  LayoutDashboard,
   LogOut,
   ChevronsUpDown,
   Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth/auth-context";
+import { PlanillaLogo } from "@/components/landing/logo";
 import { MOCK_COMPANIES } from "@/lib/auth/mock-users";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,7 @@ import {
 } from "@/components/ui/select";
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Inicio", icon: DollarSign },
+  { href: "/dashboard", label: "Inicio", icon: LayoutDashboard },
   { href: "/employees", label: "Empleados", icon: Users },
   { href: "/payroll", label: "Nómina", icon: Calculator },
   { href: "/reports", label: "Reportes", icon: BarChart3 },
@@ -52,9 +53,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Desktop sidebar */}
       <aside className="hidden md:flex md:w-60 md:flex-col md:border-r md:bg-muted/30">
         <div className="flex h-14 items-center border-b px-4">
-          <Link href="/dashboard" className="flex items-center gap-2 font-bold">
-            <DollarSign className="h-5 w-5" />
-            Planilla
+          <Link href="/dashboard">
+            <PlanillaLogo />
           </Link>
         </div>
         <nav className="flex-1 space-y-1 p-3">
@@ -144,9 +144,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Mobile header + overlay */}
       <div className="flex flex-1 flex-col">
         <header className="flex h-14 items-center justify-between border-b px-4 md:hidden">
-          <Link href="/dashboard" className="flex items-center gap-2 font-bold">
-            <DollarSign className="h-5 w-5" />
-            Planilla
+          <Link href="/dashboard">
+            <PlanillaLogo />
           </Link>
           <div className="flex items-center gap-2">
             {user?.company_name && (
@@ -175,9 +174,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               onClick={() => setMobileOpen(false)}
             />
             <nav className="relative z-10 w-64 min-h-screen bg-background border-r p-4 space-y-1">
-              <div className="flex items-center gap-2 font-bold mb-6 pb-4 border-b">
-                <DollarSign className="h-5 w-5" />
-                Planilla
+              <div className="mb-6 pb-4 border-b">
+                <PlanillaLogo />
               </div>
               {NAV_ITEMS.map((item) => {
                 const isActive =

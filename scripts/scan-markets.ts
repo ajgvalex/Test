@@ -19,7 +19,8 @@ import * as readline from "readline";
 import Anthropic from "@anthropic-ai/sdk";
 import { ethers } from "ethers";
 import { ClobClient } from "@polymarket/clob-client";
-import { Chain, Side, OrderType } from "@polymarket/clob-client/dist/types";
+import { SignatureType } from "@polymarket/clob-client/dist/order-utils/model/signature-types.model";
+import { Chain, Side, OrderType, AssetType } from "@polymarket/clob-client/dist/types";
 
 // -----------------------------------------------------------------------------
 // Load .env.local automatically
@@ -588,18 +589,37 @@ async function initClobClient(): Promise<ClobClient> {
   const privateKey = process.env.POLYMARKET_PRIVATE_KEY!;
   const host = process.env.POLYMARKET_API_URL ?? "https://clob.polymarket.com";
 
-  // Create ethers wallet as signer
+  // Create ethers wallet as signer (EOA that controls the Polymarket proxy wallet)
   const wallet = new ethers.Wallet(privateKey);
+  const eoaAddress = await wallet.getAddress();
+  log(`  EOA address: ${eoaAddress}`);
+
+  // Polymarket uses proxy wallets - funds deposited via the web UI go to a proxy
+  // contract controlled by your EOA. We must use POLY_PROXY signature type.
+  // The funderAddress is NOT needed when using POLY_PROXY (it's derived on-chain).
 
   // Create client without creds first, then derive them
-  const clientForDerive = new ClobClient(host, Chain.POLYGON, wallet);
+  const clientForDerive = new ClobClient(
+    host,
+    Chain.POLYGON,
+    wallet,
+    undefined,              // creds (derive below)
+    SignatureType.POLY_PROXY, // Polymarket proxy wallet signature
+  );
 
   log("Deriving API credentials from your wallet...");
   const creds = await clientForDerive.createOrDeriveApiKey();
-  log(`API credentials derived successfully`);
+  log(`  API Key: ${creds.key}`);
+  log(`  API credentials derived successfully`);
 
-  // Create authenticated client
-  return new ClobClient(host, Chain.POLYGON, wallet, creds);
+  // Create fully authenticated client with POLY_PROXY
+  return new ClobClient(
+    host,
+    Chain.POLYGON,
+    wallet,
+    creds,
+    SignatureType.POLY_PROXY,
+  );
 }
 
 interface Opportunity {
@@ -767,6 +787,43 @@ async function interactiveTradeFlow(
     return;
   }
 
+  // Pre-flight checks
+  log("Running pre-flight checks...");
+  try {
+    const ok = await clobClient.getOk();
+    log(`  API health: ${GREEN}OK${RESET} ${DIM}(${JSON.stringify(ok)})${RESET}`);
+  } catch (err) {
+    log(`  ${RED}API health check failed: ${err instanceof Error ? err.message : err}${RESET}`);
+  }
+
+  // Check USDC balance and allowance
+  try {
+    const balanceAllowance = await clobClient.getBalanceAllowance({
+      asset_type: AssetType.COLLATERAL,
+    });
+    log(`  USDC Balance: ${GREEN}$${balanceAllowance.balance}${RESET}`);
+    log(`  USDC Allowance: ${balanceAllowance.allowance}`);
+
+    if (parseFloat(balanceAllowance.balance) <= 0) {
+      log(`  ${RED}${BOLD}WARNING: Your Polymarket USDC balance is $0!${RESET}`);
+      log(`  ${RED}Make sure you have deposited USDC on Polymarket.${RESET}`);
+      log(`  ${RED}Your proxy wallet must have funds, not just the EOA.${RESET}`);
+    }
+  } catch (err) {
+    log(`  ${YELLOW}Could not check balance: ${err instanceof Error ? err.message : err}${RESET}`);
+  }
+
+  // Update balance allowance (ensures USDC approval for exchange)
+  try {
+    log("  Updating balance allowance (token approvals)...");
+    await clobClient.updateBalanceAllowance({
+      asset_type: AssetType.COLLATERAL,
+    });
+    log(`  ${GREEN}Balance allowance updated${RESET}`);
+  } catch (err) {
+    log(`  ${YELLOW}Could not update allowance: ${err instanceof Error ? err.message : err}${RESET}`);
+  }
+
   for (const trade of trades) {
     const opp = trade.opportunity;
     // Round price to nearest cent (CLOB requires tick size of 0.01)
@@ -790,38 +847,48 @@ async function interactiveTradeFlow(
         ? opp.question.substring(0, 45) + "..."
         : opp.question;
 
-    process.stdout.write(
-      `  Placing order: ${opp.side} ${shortQ} ($${trade.amount.toFixed(2)})... `,
-    );
+    log(`Placing order: Buy ${opp.side} "${shortQ}" | $${trade.amount.toFixed(2)} | token: ${trade.tokenId.substring(0, 20)}...`);
 
     try {
-      // Use market order (FOK) for immediate execution
-      const result = await clobClient.createAndPostMarketOrder(
-        {
-          tokenID: trade.tokenId,
-          amount: trade.amount, // amount in USDC to spend
-          side: Side.BUY,
-        },
-        undefined,
-        OrderType.FOK, // Fill-or-Kill: executes immediately or cancels
-      );
+      // Step 1: Create the signed order first (for debugging)
+      log(`  Creating signed market order...`);
+      const signedOrder = await clobClient.createMarketOrder({
+        tokenID: trade.tokenId,
+        amount: trade.amount,
+        side: Side.BUY,
+      });
+      log(`  Signed order: ${JSON.stringify(signedOrder).substring(0, 200)}...`);
+
+      // Step 2: Post the signed order as FOK
+      log(`  Posting order (FOK)...`);
+      const result = await clobClient.postOrder(signedOrder, OrderType.FOK);
+      log(`  ${BOLD}Full API response:${RESET}`);
+      log(`  ${JSON.stringify(result, null, 2)}`);
 
       const response = typeof result === "string" ? JSON.parse(result) : result;
-      const orderId = response?.orderID ?? response?.orderIds?.[0] ?? null;
+      const orderId = response?.orderID ?? response?.orderIds?.[0] ?? response?.orderid ?? null;
       const status = response?.status ?? response?.success;
 
-      if (orderId || status === "matched" || status === true) {
-        console.log(`${GREEN}${BOLD}FILLED${RESET}`);
+      if (status === "matched" || status === "MATCHED") {
+        console.log(`  ${GREEN}${BOLD}>>> FILLED <<<${RESET}`);
         if (orderId) log(`  Order ID: ${orderId}`);
-        log(`  ${DIM}${JSON.stringify(response)}${RESET}`);
+      } else if (status === "delayed" || status === "DELAYED") {
+        console.log(`  ${YELLOW}${BOLD}>>> DELAYED (processing) <<<${RESET}`);
+        if (orderId) log(`  Order ID: ${orderId}`);
       } else {
-        console.log(`${YELLOW}SUBMITTED${RESET}`);
-        log(`  Response: ${JSON.stringify(response)}`);
+        console.log(`  ${YELLOW}${BOLD}>>> Status: ${status ?? "unknown"} <<<${RESET}`);
+        log(`  ${DIM}The order may not have been filled. Check polymarket.com${RESET}`);
       }
-    } catch (err) {
-      console.log(`${RED}ERROR${RESET}`);
+    } catch (err: any) {
+      console.log(`  ${RED}${BOLD}>>> ERROR <<<${RESET}`);
+      if (err?.response) {
+        // Axios-style error
+        log(`  ${RED}Status: ${err.response.status}${RESET}`);
+        log(`  ${RED}Body: ${JSON.stringify(err.response.data)}${RESET}`);
+      }
       const msg = err instanceof Error ? err.message : String(err);
       log(`  ${RED}${msg}${RESET}`);
+      if (err?.stack) log(`  ${DIM}${err.stack.split("\n").slice(1, 4).join("\n  ")}${RESET}`);
     }
   }
 

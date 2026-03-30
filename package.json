@@ -9,7 +9,11 @@
     "lint": "next lint",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "bot": "tsx scripts/run-bot.ts",
+    "bot:momentum": "tsx scripts/run-bot.ts --strategy momentum",
+    "bot:value": "tsx scripts/run-bot.ts --strategy value",
+    "bot:mean": "tsx scripts/run-bot.ts --strategy mean_reversion"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

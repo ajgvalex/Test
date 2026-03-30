@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import { Users, Calculator, BarChart3, ArrowRight } from "lucide-react";
+import { useAuth } from "@/lib/auth/auth-context";
 
 const MODULES = [
   {
@@ -29,6 +32,8 @@ const MODULES = [
 ];
 
 export default function Home() {
+  const { user } = useAuth();
+
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-10">
@@ -36,8 +41,9 @@ export default function Home() {
           Bienvenido a PayrollApp
         </h1>
         <p className="mt-2 text-muted-foreground">
-          Sistema de gestión de nómina para Honduras y El Salvador. Selecciona
-          un módulo para comenzar.
+          {user?.company_name
+            ? `${user.company_name} — Selecciona un módulo para comenzar.`
+            : "Selecciona un módulo para comenzar."}
         </p>
       </div>
 
@@ -63,14 +69,6 @@ export default function Home() {
             </span>
           </Link>
         ))}
-      </div>
-
-      <div className="mt-12 rounded-lg border border-dashed p-6 text-center">
-        <p className="text-sm text-muted-foreground">
-          Datos de demostración con 8 empleados (Honduras y El Salvador).
-          Los motores de cálculo de nómina son funcionales con reglas reales de
-          IHSS, RAP, ISR, ISSS, AFP.
-        </p>
       </div>
     </div>
   );

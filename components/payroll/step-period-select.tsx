@@ -1,7 +1,8 @@
 "use client";
 
 import type { CountryCode, PayrollPeriod, PayrollFrequency } from "@/types";
-import { COUNTRY_LABELS, MOCK_PAYROLL_PERIODS } from "@/lib/mock-data";
+import { COUNTRY_LABELS } from "@/lib/mock-data";
+import { getPayrollPeriods } from "@/lib/data";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -14,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Calendar, Globe, Clock } from "lucide-react";
 
 interface StepPeriodSelectProps {
+  companyId: string;
   country: CountryCode | "";
   onCountryChange: (country: CountryCode) => void;
   selectedPeriod: PayrollPeriod | null;
@@ -52,6 +54,7 @@ function formatDate(d: string) {
 }
 
 export function StepPeriodSelect({
+  companyId,
   country,
   onCountryChange,
   selectedPeriod,
@@ -59,12 +62,9 @@ export function StepPeriodSelect({
   frequency,
   onFrequencyChange,
 }: StepPeriodSelectProps) {
-  const draftPeriods = MOCK_PAYROLL_PERIODS.filter(
-    (p) => p.status === "draft"
-  );
-  const recentPeriods = MOCK_PAYROLL_PERIODS.filter(
-    (p) => p.status !== "draft"
-  );
+  const periods = getPayrollPeriods(companyId);
+  const draftPeriods = periods.filter((p) => p.status === "draft");
+  const recentPeriods = periods.filter((p) => p.status !== "draft");
 
   return (
     <div className="space-y-6">

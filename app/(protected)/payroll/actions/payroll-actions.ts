@@ -4,7 +4,8 @@ import type { CountryCode, DeductionRule, PayrollEntry } from "@/types";
 import type { Employee } from "@/types";
 import { calculateHondurasPayroll } from "@/lib/payroll-engine/honduras";
 import { calculateElSalvadorPayroll } from "@/lib/payroll-engine/el-salvador";
-import { getDeductionRules, MOCK_EMPLOYEES } from "@/lib/mock-data";
+import { getDeductionRules } from "@/lib/mock-data";
+import { getActiveEmployees } from "@/lib/data";
 import type { Novedad } from "@/lib/mock-data";
 
 // ============================================================================
@@ -17,6 +18,7 @@ export interface PayrollCalcInput {
   start_date: string;
   end_date: string;
   country: CountryCode;
+  company_id: string;
   novedades: Novedad[];
   /** Override map: employee_id → overridden fields */
   overrides: Record<string, EmployeeOverride>;
@@ -77,13 +79,11 @@ function round2(v: number): number {
 export async function calculatePayrollPreview(
   input: PayrollCalcInput
 ): Promise<PayrollPreviewResult> {
-  const { country, novedades, overrides } = input;
+  const { country, company_id, novedades, overrides } = input;
   const rules: DeductionRule[] = getDeductionRules(country);
 
-  // Filter active employees for selected country
-  const activeEmployees = MOCK_EMPLOYEES.filter(
-    (e) => e.status === "active" && e.country === country
-  );
+  // Filter active employees for selected country and company
+  const activeEmployees = getActiveEmployees(company_id, country);
 
   // Build per-employee novedad aggregation
   const novedadMap = new Map<

@@ -6,6 +6,7 @@ import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import type { CountryCode, PayrollPeriod, PayrollFrequency } from "@/types";
 import type { Novedad } from "@/lib/mock-data";
 import { MOCK_NOVEDADES } from "@/lib/mock-data";
+import { useAuth } from "@/lib/auth/auth-context";
 import type {
   EmployeeOverride,
   PayrollPreviewResult,
@@ -26,6 +27,8 @@ const STEPS = [
 ] as const;
 
 export default function PayrollPage() {
+  const { user } = useAuth();
+  const companyId = user?.company_id ?? "";
   const [step, setStep] = useState(1);
 
   // Step 1 state
@@ -70,6 +73,7 @@ export default function PayrollPage() {
           start_date: selectedPeriod!.start_date,
           end_date: selectedPeriod!.end_date,
           country: country as CountryCode,
+          company_id: companyId,
           novedades,
           overrides,
         });
@@ -97,6 +101,7 @@ export default function PayrollPage() {
         start_date: selectedPeriod!.start_date,
         end_date: selectedPeriod!.end_date,
         country: country as CountryCode,
+        company_id: companyId,
         novedades,
         overrides: newOverrides,
       });
@@ -112,6 +117,7 @@ export default function PayrollPage() {
         start_date: selectedPeriod!.start_date,
         end_date: selectedPeriod!.end_date,
         country: country as CountryCode,
+        company_id: companyId,
         novedades,
         overrides,
       });
@@ -194,6 +200,7 @@ export default function PayrollPage() {
       <div className="mb-8">
         {step === 1 && (
           <StepPeriodSelect
+            companyId={companyId}
             country={country}
             onCountryChange={setCountry}
             selectedPeriod={selectedPeriod}
@@ -204,6 +211,7 @@ export default function PayrollPage() {
         )}
         {step === 2 && (
           <StepNovedades
+            companyId={companyId}
             novedades={novedades}
             onNovedadesChange={setNovedades}
             country={country as CountryCode}

@@ -4,7 +4,9 @@ import { useState, useMemo } from "react";
 import { Plus, Search } from "lucide-react";
 
 import type { Employee } from "@/types";
-import { MOCK_EMPLOYEES, DEPARTMENTS, COUNTRY_LABELS, STATUS_LABELS } from "@/lib/mock-data";
+import { DEPARTMENTS, COUNTRY_LABELS, STATUS_LABELS } from "@/lib/mock-data";
+import { getEmployees } from "@/lib/data";
+import { useAuth } from "@/lib/auth/auth-context";
 import type { EmployeeFormValues } from "@/lib/validations/employee";
 import { DataTable } from "@/components/data-table";
 import { EmployeeFormDialog } from "@/components/employee-form-dialog";
@@ -20,7 +22,11 @@ import {
 import { columns } from "./columns";
 
 export default function EmployeesPage() {
-  const [employees, setEmployees] = useState<Employee[]>(MOCK_EMPLOYEES);
+  const { user } = useAuth();
+  const companyId = user?.company_id ?? "";
+  const [employees, setEmployees] = useState<Employee[]>(() =>
+    getEmployees(companyId)
+  );
   const [search, setSearch] = useState("");
   const [countryFilter, setCountryFilter] = useState("all");
   const [departmentFilter, setDepartmentFilter] = useState("all");
@@ -60,7 +66,7 @@ export default function EmployeesPage() {
   function handleCreate(values: EmployeeFormValues) {
     const newEmployee: Employee = {
       id: crypto.randomUUID(),
-      company_id: "11111111-1111-1111-1111-111111111111",
+      company_id: companyId,
       ...values,
       email: values.email || null,
       phone: values.phone || null,

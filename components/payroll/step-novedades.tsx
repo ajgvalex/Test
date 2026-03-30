@@ -7,7 +7,7 @@ import { z } from "zod";
 import { Plus, Trash2, Clock, DollarSign, TrendingUp, ArrowUpDown } from "lucide-react";
 
 import type { Novedad } from "@/lib/mock-data";
-import { MOCK_EMPLOYEES } from "@/lib/mock-data";
+import { getActiveEmployees } from "@/lib/data";
 import type { CountryCode } from "@/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/select";
 
 interface StepNovedadesProps {
+  companyId: string;
   novedades: Novedad[];
   onNovedadesChange: (novedades: Novedad[]) => void;
   country: CountryCode;
@@ -93,15 +94,14 @@ function formatCurrency(amount: number, country: string) {
 }
 
 export function StepNovedades({
+  companyId,
   novedades,
   onNovedadesChange,
   country,
 }: StepNovedadesProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  const activeEmployees = MOCK_EMPLOYEES.filter(
-    (e) => e.status === "active" && e.country === country
-  );
+  const activeEmployees = getActiveEmployees(companyId, country);
 
   const form = useForm<NovedadFormValues>({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -136,7 +136,7 @@ export function StepNovedades({
   }
 
   function getEmployeeName(employeeId: string) {
-    const emp = MOCK_EMPLOYEES.find((e) => e.id === employeeId);
+    const emp = activeEmployees.find((e) => e.id === employeeId);
     return emp ? `${emp.first_name} ${emp.last_name}` : "—";
   }
 

@@ -13,7 +13,7 @@ import type { CountryCode } from "@/types";
 import type {
   PayrollPreviewResult,
   PayrollApprovalResult,
-} from "@/app/payroll/actions/payroll-actions";
+} from "@/app/(protected)/payroll/actions/payroll-actions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

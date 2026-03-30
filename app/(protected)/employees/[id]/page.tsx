@@ -18,11 +18,12 @@ import {
 import type { Employee } from "@/types";
 import type { EmployeeFormValues } from "@/lib/validations/employee";
 import {
-  MOCK_EMPLOYEES,
   COUNTRY_LABELS,
   STATUS_LABELS,
   PAYMENT_METHOD_LABELS,
 } from "@/lib/mock-data";
+import { getEmployeeById } from "@/lib/data";
+import { useAuth } from "@/lib/auth/auth-context";
 import { EmployeeFormDialog } from "@/components/employee-form-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -109,11 +110,13 @@ export default function EmployeeProfilePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const { user } = useAuth();
+  const companyId = user?.company_id ?? "";
   const [editOpen, setEditOpen] = useState(false);
 
   const employee = useMemo(
-    () => MOCK_EMPLOYEES.find((e) => e.id === id),
-    [id]
+    () => getEmployeeById(companyId, id),
+    [companyId, id]
   );
 
   if (!employee) {

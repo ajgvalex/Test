@@ -12,7 +12,9 @@ import {
 } from "lucide-react";
 
 import type { CountryCode } from "@/types";
-import { MOCK_EMPLOYEES, COUNTRY_LABELS, PAYMENT_METHOD_LABELS } from "@/lib/mock-data";
+import { COUNTRY_LABELS, PAYMENT_METHOD_LABELS } from "@/lib/mock-data";
+import { getActiveEmployees } from "@/lib/data";
+import { useAuth } from "@/lib/auth/auth-context";
 import { calculateHondurasPayroll } from "@/lib/payroll-engine/honduras";
 import { calculateElSalvadorPayroll } from "@/lib/payroll-engine/el-salvador";
 import { getDeductionRules } from "@/lib/mock-data";
@@ -131,14 +133,14 @@ function makeBulkPayslipDoc(payslips: PayslipData[]) {
 // ============================================================================
 
 export default function ReportsPage() {
+  const { user } = useAuth();
+  const companyId = user?.company_id ?? "";
   const [selectedCountry, setSelectedCountry] = useState<CountryCode>("HN");
 
   // Calculate payroll for all active employees in selected country
   const payrollResults = useMemo(() => {
     const rules = getDeductionRules(selectedCountry);
-    const employees = MOCK_EMPLOYEES.filter(
-      (e) => e.status === "active" && e.country === selectedCountry
-    );
+    const employees = getActiveEmployees(companyId, selectedCountry);
 
     return employees.map((emp) => {
       if (selectedCountry === "SV") {

@@ -16,19 +16,19 @@ INSERT INTO public.companies (id, name, legal_name, tax_id, country, currency)
 VALUES
   (
     '11111111-1111-1111-1111-111111111111',
-    'Demo Honduras S.A.',
-    'Demo Honduras Sociedad Anónima',
+    'Cremini Test',
+    'Cremini Test S.A.',
     'RTN-0801-1999-00001',
     'HN',
     'HNL'
   ),
   (
     '22222222-2222-2222-2222-222222222222',
-    'Demo El Salvador S.A. de C.V.',
-    'Demo El Salvador Sociedad Anónima de Capital Variable',
-    'NIT-0614-010199-101-0',
-    'SV',
-    'USD'
+    'Meraki Test',
+    'Meraki Test S.A.',
+    'RTN-0801-1999-00002',
+    'HN',
+    'HNL'
   )
 ON CONFLICT (id) DO NOTHING;
 

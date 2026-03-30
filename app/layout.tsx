@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { AppShell } from "@/components/app-shell";
+import { AuthProvider } from "@/lib/auth/auth-context";
 
 export const metadata: Metadata = {
   title: "PayrollApp",
@@ -15,7 +15,7 @@ export default function RootLayout({
   return (
     <html lang="es">
       <body className="font-sans antialiased">
-        <AppShell>{children}</AppShell>
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

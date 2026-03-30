@@ -50,7 +50,7 @@ loadEnvFile();
 function parseArgs() {
   const args = process.argv.slice(2);
   const opts = {
-    limit: 20,
+    limit: 100,
     minEdge: 0.05, // minimum 5% edge to suggest
     balance: 50,
   };
@@ -150,9 +150,16 @@ interface MarketWithPrice {
 
 async function enrichMarketPrices(markets: ClobMarket[]): Promise<MarketWithPrice[]> {
   const results: MarketWithPrice[] = [];
+  const now = new Date();
 
   for (const market of markets) {
     if (!market.tokens || market.tokens.length === 0 || market.closed) continue;
+
+    // Skip markets whose end date has already passed
+    if (market.end_date_iso) {
+      const endDate = new Date(market.end_date_iso);
+      if (endDate < now) continue;
+    }
 
     const yesToken = market.tokens.find((t) => t.outcome === "Yes") ?? market.tokens[0];
     const noToken = market.tokens.find((t) => t.outcome === "No") ?? market.tokens[1];
@@ -341,7 +348,7 @@ async function main() {
   log("Fetching current prices...");
   const marketsWithPrices = await enrichMarketPrices(rawMarkets);
   log(
-    `${BOLD}${marketsWithPrices.length}${RESET} markets with valid prices (${rawMarkets.length - marketsWithPrices.length} skipped)`,
+    `${BOLD}${marketsWithPrices.length}${RESET} current markets with valid prices (${rawMarkets.length - marketsWithPrices.length} skipped: resolved/expired/extreme price)`,
   );
 
   if (marketsWithPrices.length === 0) {

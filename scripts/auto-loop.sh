@@ -11,9 +11,11 @@ echo $$ > .auto-loop.pid
 
 # Export .env.local into shell environment
 if [ -f .env.local ]; then
-  set -a
-  source <(grep -v '^\s*#' .env.local | grep '=')
-  set +a
+  while IFS='=' read -r key value; do
+    key=$(echo "$key" | xargs)
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    export "$key=$value"
+  done < .env.local
 fi
 
 INTERVAL=3600  # 60 minutes in seconds

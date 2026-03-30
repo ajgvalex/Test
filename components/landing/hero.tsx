@@ -9,9 +9,9 @@ export function Hero() {
         </p>
 
         <h1 className="font-serif text-3xl leading-tight text-landing-noche md:text-5xl md:leading-tight">
-          Tu planilla te cuesta más{" "}
+          ¿Cuánto te está costando tu planilla{" "}
           <em className="not-italic" style={{ fontStyle: "italic" }}>
-            de lo que crees.
+            sin que lo sepas?
           </em>
         </h1>
 

@@ -37,9 +37,8 @@ function loadEnvFile() {
       if (eqIdx === -1) continue;
       const key = trimmed.slice(0, eqIdx).trim();
       const value = trimmed.slice(eqIdx + 1).trim();
-      if (!process.env[key]) {
-        process.env[key] = value;
-      }
+      // Last value wins (allows appending overrides to .env.local)
+      process.env[key] = value;
     }
   } catch {
     // .env.local not found, rely on exported vars
@@ -464,12 +463,17 @@ interface CryptoTA {
   high24h: number;
   low24h: number;
   volume24h: number;
-  sma7: number;   // 7-period simple moving average (hourly)
-  sma25: number;  // 25-period SMA
-  rsi14: number;  // 14-period RSI
+  sma7: number;      // 7-period SMA (hourly)
+  sma25: number;     // 25-period SMA (hourly)
+  rsi14: number;     // 14-period RSI (hourly)
   trend: "bullish" | "bearish" | "neutral";
   support: number;
   resistance: number;
+  // Short-term (5-minute candles)
+  rsi14_5m: number;  // 14-period RSI on 5m candles
+  sma7_5m: number;   // 7-period SMA on 5m candles
+  trend5m: "bullish" | "bearish" | "neutral";
+  change10m: number; // price change last 10 minutes
 }
 
 function computeRSI(closes: number[], period = 14): number {
@@ -530,9 +534,28 @@ async function fetchCryptoTA(): Promise<CryptoTA[]> {
       const support = Math.min(...lows.slice(-12));
       const resistance = Math.max(...highs.slice(-12));
 
+      // Short-term: 5-minute candles for immediate momentum
+      let rsi14_5m = 50, sma7_5m = currentPrice, trend5m: "bullish" | "bearish" | "neutral" = "neutral", change10m = 0;
+      try {
+        const kline5mUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=5m&limit=30`;
+        const kline5mRes = await fetch(kline5mUrl);
+        if (kline5mRes.ok) {
+          const k5m = await kline5mRes.json() as number[][];
+          const closes5m = k5m.map((k: any) => parseFloat(k[4]));
+          rsi14_5m = computeRSI(closes5m, 14);
+          sma7_5m = computeSMA(closes5m, 7);
+          // 10 min = 2 candles of 5m
+          const price10mAgo = closes5m.length >= 2 ? closes5m[closes5m.length - 2] : closes5m[0];
+          change10m = ((currentPrice - price10mAgo) / price10mAgo) * 100;
+          if (currentPrice > sma7_5m && rsi14_5m > 55) trend5m = "bullish";
+          else if (currentPrice < sma7_5m && rsi14_5m < 45) trend5m = "bearish";
+        }
+      } catch { /* 5m data optional */ }
+
       results.push({
         symbol, price: currentPrice, change24h, high24h, low24h, volume24h,
         sma7, sma25, rsi14, trend, support, resistance,
+        rsi14_5m, sma7_5m, trend5m, change10m,
       });
     } catch {
       // API unavailable, skip
@@ -547,13 +570,14 @@ function formatCryptoTA(taList: CryptoTA[]): string {
 
   let text = "\n=== REAL-TIME CRYPTO TECHNICAL ANALYSIS ===\n";
   for (const ta of taList) {
-    const trendEmoji = ta.trend === "bullish" ? "UP" : ta.trend === "bearish" ? "DOWN" : "SIDEWAYS";
+    const trendH = ta.trend === "bullish" ? "UP" : ta.trend === "bearish" ? "DOWN" : "SIDEWAYS";
+    const trend5 = ta.trend5m === "bullish" ? "UP" : ta.trend5m === "bearish" ? "DOWN" : "SIDEWAYS";
     text += `\n${ta.symbol}/USDT: $${ta.price.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-  24h Change: ${ta.change24h > 0 ? "+" : ""}${ta.change24h.toFixed(2)}%
-  24h Range: $${ta.low24h.toLocaleString()} - $${ta.high24h.toLocaleString()}
-  SMA(7h): $${ta.sma7.toFixed(0)} | SMA(25h): $${ta.sma25.toFixed(0)}
-  RSI(14): ${ta.rsi14.toFixed(1)} ${ta.rsi14 > 70 ? "(OVERBOUGHT)" : ta.rsi14 < 30 ? "(OVERSOLD)" : ""}
-  Trend: ${trendEmoji} | Support: $${ta.support.toLocaleString()} | Resistance: $${ta.resistance.toLocaleString()}`;
+  HOURLY: 24h Change: ${ta.change24h > 0 ? "+" : ""}${ta.change24h.toFixed(2)}% | Range: $${ta.low24h.toLocaleString()} - $${ta.high24h.toLocaleString()}
+    SMA(7h): $${ta.sma7.toFixed(0)} | SMA(25h): $${ta.sma25.toFixed(0)} | RSI(14h): ${ta.rsi14.toFixed(1)} ${ta.rsi14 > 70 ? "OVERBOUGHT" : ta.rsi14 < 30 ? "OVERSOLD" : ""} | Trend: ${trendH}
+    Support: $${ta.support.toLocaleString()} | Resistance: $${ta.resistance.toLocaleString()}
+  SHORT-TERM (5m candles): Last 10min: ${ta.change10m > 0 ? "+" : ""}${ta.change10m.toFixed(3)}%
+    RSI(14x5m): ${ta.rsi14_5m.toFixed(1)} | SMA(7x5m): $${ta.sma7_5m.toFixed(0)} | Trend(5m): ${trend5}`;
   }
   return text;
 }
@@ -700,6 +724,29 @@ function kellyBet(
 }
 
 // -----------------------------------------------------------------------------
+// Trade history logging
+// -----------------------------------------------------------------------------
+
+function logTrade(trade: {
+  timestamp: string;
+  question: string;
+  side: string;
+  amount: number;
+  price: number;
+  expectedReturn: number;
+  confidence: string;
+  newsAlignment: string;
+  orderId?: string;
+  status: string;
+}) {
+  const historyPath = path.resolve(process.cwd(), "trade-history.jsonl");
+  const line = JSON.stringify(trade) + "\n";
+  try {
+    fs.appendFileSync(historyPath, line);
+  } catch { /* non-critical */ }
+}
+
+// -----------------------------------------------------------------------------
 // Console formatting
 // -----------------------------------------------------------------------------
 
@@ -745,7 +792,23 @@ async function main() {
     ? `${RED}${BOLD}AUTO-TRADE${RESET}${opts.aggressive ? ` ${YELLOW}AGGRESSIVE${RESET}` : ""}`
     : "interactive";
   logHeader("Polymarket Market Scanner");
-  log(`Mode: ${modeLabel}`);
+  log(`Mode: ${modeLabel}${opts.crypto ? ` | ${CYAN}CRYPTO${RESET}` : ""}`);
+
+  // Auto-detect real balance if wallet is configured
+  if (process.env.POLYMARKET_PRIVATE_KEY && process.env.POLYMARKET_WALLET_ADDRESS) {
+    try {
+      const quickClient = await initClobClient();
+      const bal = await quickClient.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+      const realBalance = parseFloat(bal.balance) / 1_000_000;
+      if (realBalance > 0) {
+        opts.balance = Math.floor(realBalance * 100) / 100;
+        log(`  Live balance from Polymarket: ${GREEN}${BOLD}$${opts.balance}${RESET}`);
+      }
+    } catch {
+      log(`  ${DIM}Could not fetch live balance, using --balance${RESET}`);
+    }
+  }
+
   log(`Fetching up to ${BOLD}${opts.limit}${RESET} markets`);
   log(`Min edge: ${BOLD}${(opts.minEdge * 100).toFixed(0)}%${RESET} | Min return: ${BOLD}${(opts.minReturn * 100).toFixed(0)}%${RESET} | Min bet: ${BOLD}$${opts.minBet}${RESET} | Min confidence: ${BOLD}${opts.minConf}${RESET}`);
   log(`Balance: ${BOLD}$${opts.balance}${RESET}${opts.aggressive ? ` | Kelly: ${YELLOW}half-Kelly (aggressive)${RESET}` : ""}`);
@@ -789,9 +852,14 @@ async function main() {
     marketsWithPrices.map((m) => ({ question: m.market.question })),
   );
   const marketsWithNews = [...newsContext.entries()].filter(([, news]) => news.length > 0).length;
+  const newsFailRate = marketsWithPrices.length > 0 ? ((marketsWithPrices.length - marketsWithNews) / marketsWithPrices.length * 100) : 0;
+  const newsColor = newsFailRate > 50 ? RED : newsFailRate > 25 ? YELLOW : GREEN;
   log(
-    `Found news for ${GREEN}${BOLD}${marketsWithNews}${RESET} of ${marketsWithPrices.length} markets`,
+    `Found news for ${GREEN}${BOLD}${marketsWithNews}${RESET} of ${marketsWithPrices.length} markets (${newsColor}${newsFailRate.toFixed(0)}% blind${RESET})`,
   );
+  if (newsFailRate > 50) {
+    log(`  ${RED}${BOLD}WARNING: News search failing for >50% of markets. Analysis will be less reliable.${RESET}`);
+  }
 
   // 4. Analyze markets in batches with Claude (enriched with news + crypto TA)
   const BATCH_SIZE = 8;
@@ -1132,8 +1200,31 @@ async function autoTradeFlow(
       if (status === "matched" || status === "delayed" || response?.success) {
         log(`  ${GREEN}${BOLD}OK${RESET} (${status}) ${DIM}${response?.orderID ?? ""}${RESET}`);
         successCount++;
+        logTrade({
+          timestamp: new Date().toISOString(),
+          question: opp.question,
+          side: opp.side,
+          amount: trade.amount,
+          price: opp.side === "YES" ? opp.marketPrice : 1 - opp.marketPrice,
+          expectedReturn: opp.expectedReturn,
+          confidence: opp.confidence,
+          newsAlignment: opp.newsAlignment,
+          orderId: response?.orderID,
+          status,
+        });
       } else {
         log(`  ${YELLOW}${status}${RESET}: ${JSON.stringify(response).substring(0, 150)}`);
+        logTrade({
+          timestamp: new Date().toISOString(),
+          question: opp.question,
+          side: opp.side,
+          amount: trade.amount,
+          price: opp.side === "YES" ? opp.marketPrice : 1 - opp.marketPrice,
+          expectedReturn: opp.expectedReturn,
+          confidence: opp.confidence,
+          newsAlignment: opp.newsAlignment,
+          status: `failed: ${status}`,
+        });
       }
     } catch (err: any) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1143,6 +1234,7 @@ async function autoTradeFlow(
 
   console.log();
   log(`${GREEN}${BOLD}Auto-trade complete: ${successCount}/${trades.length} trades executed${RESET}`);
+  log(`Trade history saved to ${BOLD}trade-history.jsonl${RESET}`);
   log(`Check positions at polymarket.com/portfolio`);
 }
 
@@ -1460,6 +1552,18 @@ async function interactiveTradeFlow(
         console.log(`  ${YELLOW}${BOLD}>>> Status: ${status ?? "unknown"} <<<${RESET}`);
         log(`  ${DIM}The order may not have been filled. Check polymarket.com${RESET}`);
       }
+      logTrade({
+        timestamp: new Date().toISOString(),
+        question: opp.question,
+        side: opp.side,
+        amount: trade.amount,
+        price: rawPrice,
+        expectedReturn: 0,
+        confidence: opp.confidence,
+        newsAlignment: opp.newsAlignment,
+        orderId: orderId ?? undefined,
+        status: String(status ?? "unknown"),
+      });
     } catch (err: any) {
       console.log(`  ${RED}${BOLD}>>> ERROR <<<${RESET}`);
       if (err?.response) {

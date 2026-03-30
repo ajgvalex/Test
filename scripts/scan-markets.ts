@@ -236,6 +236,34 @@ async function getActiveMarkets(limit: number, cryptoOnly = false, minDuration =
 
   log(`Gamma API returned ${BOLD}${gammaMarkets.length}${RESET} active markets`);
 
+  // Debug: show why markets are filtered out
+  if (cryptoOnly || minDuration > 0 || maxDuration > 0) {
+    let noCondition = 0, expired = 0, noCryptoKeyword = 0, tooShort = 0, tooLong = 0, noEndDate = 0, passed = 0;
+    const now2 = new Date();
+    for (const m of gammaMarkets) {
+      if (!m.conditionId || !m.clobTokenIds) { noCondition++; continue; }
+      if (m.endDate && new Date(m.endDate) < now2) { expired++; continue; }
+      if (cryptoOnly) {
+        const text = `${m.question ?? ""} ${m.description ?? ""}`;
+        if (!CRYPTO_KEYWORDS.test(text)) { noCryptoKeyword++; continue; }
+      }
+      if ((minDuration > 0 || maxDuration > 0) && m.endDate) {
+        const mins = (new Date(m.endDate).getTime() - now2.getTime()) / 60000;
+        if (minDuration > 0 && mins < minDuration) { tooShort++; continue; }
+        if (maxDuration > 0 && mins > maxDuration) { tooLong++; continue; }
+      }
+      if ((minDuration > 0 || maxDuration > 0) && !m.endDate) { noEndDate++; continue; }
+      passed++;
+    }
+    log(`${DIM}Filter breakdown: ${noCondition} no condition, ${expired} expired, ${noCryptoKeyword} no crypto keyword, ${tooShort} too short, ${tooLong} too long (>${maxDuration}m), ${noEndDate} no end date, ${BOLD}${passed} passed${RESET}`);
+    // Show sample of filtered markets
+    const samples = gammaMarkets.slice(0, 3);
+    for (const s of samples) {
+      const mins = s.endDate ? ((new Date(s.endDate).getTime() - now2.getTime()) / 60000).toFixed(0) : "N/A";
+      log(`${DIM}  Sample: "${(s.question ?? "").slice(0, 60)}" | ends in ${mins} min${RESET}`);
+    }
+  }
+
   // Convert to ClobMarket format with prices
   const now = new Date();
   return gammaMarkets

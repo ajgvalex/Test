@@ -27,7 +27,12 @@ import { Chain, Side, OrderType, AssetType } from "@polymarket/clob-client/dist/
 // -----------------------------------------------------------------------------
 
 function loadEnvFile() {
-  const envPath = path.resolve(process.cwd(), ".env.local");
+  // Try cwd first, then fall back to project root (one level up from scripts/)
+  const candidates = [
+    path.resolve(process.cwd(), ".env.local"),
+    path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", ".env.local"),
+  ];
+  const envPath = candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
   try {
     const content = fs.readFileSync(envPath, "utf-8");
     for (const line of content.split("\n")) {

@@ -64,7 +64,9 @@ function parseArgs() {
     aggressive: false,   // aggressive Kelly sizing
     maxTrades: 5,        // max trades per run in auto mode
     maxPerTrade: 0,      // max USD per trade (0 = no cap, use Kelly)
-    crypto: false,       // filter for crypto markets + BTC technical analysis
+    crypto: false,       // filter for crypto markets + BTC/ETH TA
+    minDuration: 0,      // min minutes until market resolves (0 = no filter)
+    maxDuration: 0,      // max minutes until market resolves (0 = no filter)
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -107,6 +109,12 @@ function parseArgs() {
       case "--max-per-trade":
         opts.maxPerTrade = Number(args[++i]);
         break;
+      case "--min-duration":
+        opts.minDuration = Number(args[++i]);
+        break;
+      case "--max-duration":
+        opts.maxDuration = Number(args[++i]);
+        break;
       case "--help":
       case "-h":
         console.log(`
@@ -130,6 +138,8 @@ Auto-trade mode:
 
 Crypto mode:
   --crypto           Filter for crypto markets only + real-time BTC/ETH analysis
+  --min-duration     Min minutes until market resolves (default: 0 = no filter)
+  --max-duration     Max minutes until market resolves (default: 0 = no filter)
 
 Examples:
   npx tsx scripts/scan-markets.ts --min-bet 5 -r 30 -c medium
@@ -197,7 +207,9 @@ async function fetchJson<T>(baseUrl: string, path: string, query?: Record<string
   return (await res.json()) as T;
 }
 
-async function getActiveMarkets(limit: number, cryptoOnly = false): Promise<ClobMarket[]> {
+const CRYPTO_KEYWORDS = /\b(BTC|Bitcoin|ETH|Ethereum|crypto|cryptocurrency|token|blockchain|altcoin|Solana|SOL|XRP|Ripple|Cardano|ADA|Dogecoin|DOGE|MATIC|Polygon|Avalanche|AVAX|Chainlink|LINK|Litecoin|LTC|Polkadot|DOT|BNB|Binance)\b/i;
+
+async function getActiveMarkets(limit: number, cryptoOnly = false, minDuration = 0, maxDuration = 0): Promise<ClobMarket[]> {
   // Use Gamma API - returns currently active, popular markets with prices
   const query: Record<string, string> = {
     limit: String(limit),
@@ -223,6 +235,20 @@ async function getActiveMarkets(limit: number, cryptoOnly = false): Promise<Clob
     .filter((m) => {
       if (!m.conditionId || !m.clobTokenIds) return false;
       if (m.endDate && new Date(m.endDate) < now) return false;
+
+      // Strict client-side crypto keyword filter
+      if (cryptoOnly) {
+        const text = `${m.question ?? ""} ${m.description ?? ""}`;
+        if (!CRYPTO_KEYWORDS.test(text)) return false;
+      }
+
+      // Duration filter: only keep markets resolving within [min, max] minutes
+      if ((minDuration > 0 || maxDuration > 0) && m.endDate) {
+        const minutesUntilEnd = (new Date(m.endDate).getTime() - now.getTime()) / 60000;
+        if (minDuration > 0 && minutesUntilEnd < minDuration) return false;
+        if (maxDuration > 0 && minutesUntilEnd > maxDuration) return false;
+      }
+
       return true;
     })
     .map((m) => {
@@ -953,7 +979,7 @@ async function main() {
 
   // 1. Fetch open markets from Gamma API
   log(`Fetching active ${opts.crypto ? "CRYPTO " : ""}markets from Polymarket...`);
-  const openMarkets = await getActiveMarkets(opts.limit, opts.crypto);
+  const openMarkets = await getActiveMarkets(opts.limit, opts.crypto, opts.minDuration, opts.maxDuration);
   log(`Found ${BOLD}${openMarkets.length}${RESET} open, tradeable markets`);
 
   // 2. Get prices for each market

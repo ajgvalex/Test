@@ -5,14 +5,14 @@ export function CtaFinal() {
     <section className="mx-auto max-w-4xl px-6 py-20 md:py-28">
       <div className="mx-auto max-w-lg text-center">
         <h2 className="font-serif text-3xl text-landing-noche md:text-4xl">
-          Nomina sin drama.{" "}
+          Nómina sin drama.{" "}
           <em className="not-italic" style={{ fontStyle: "italic" }}>
             Desde hoy.
           </em>
         </h2>
 
         <p className="mt-4 text-base font-light text-landing-noche/60">
-          Empieza gratis. Sin contratos. Sin letra pequena.
+          Empezá gratis. Sin contratos. Sin letra pequeña.
         </p>
 
         <Link
@@ -23,7 +23,7 @@ export function CtaFinal() {
         </Link>
 
         <p className="mt-4 text-xs text-landing-noche/40">
-          30 dias gratis &middot; Cancela cuando quieras
+          30 días gratis &middot; Cancelá cuando quieras
         </p>
       </div>
     </section>

@@ -13,7 +13,7 @@ export function Nav() {
           href="/login"
           className="text-sm font-medium text-landing-marca transition-colors hover:text-landing-noche"
         >
-          Iniciar sesion
+          Iniciar sesión
         </Link>
       </div>
     </nav>

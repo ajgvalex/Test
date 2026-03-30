@@ -1,7 +1,7 @@
 const stats = [
   {
     number: "21",
-    label: "categorias de salario minimo en Honduras",
+    label: "categorías de salario mínimo en Honduras",
   },
   {
     number: "3",
@@ -9,7 +9,7 @@ const stats = [
   },
   {
     number: "0",
-    label: "SaaS nativo que los cubria todos — hasta ahora",
+    label: "SaaS nativo que los cubría todos — hasta ahora",
   },
 ];
 

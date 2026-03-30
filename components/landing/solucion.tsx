@@ -13,9 +13,9 @@ const features = [
         <path d="M10 2L12.09 7.26L18 8.27L14 12.14L14.18 18.02L10 15.77L5.82 18.02L6 12.14L2 8.27L7.91 7.26L10 2Z" stroke="#185FA5" strokeWidth="1.5" strokeLinejoin="round" />
       </svg>
     ),
-    title: "Calculo automatico y correcto",
+    title: "Cálculo automático y correcto",
     description:
-      "IHSS, RAP, ISR, INFOP, aguinaldo, catorceavo, vacaciones, cesantia. Todo calculado al centavo, cada quincena, sin que toques una formula.",
+      "IHSS, RAP, ISR, INFOP, aguinaldo, catorceavo, vacaciones, cesantía. Todo calculado al centavo, cada quincena, sin que toques una fórmula.",
   },
   {
     icon: (
@@ -26,7 +26,7 @@ const features = [
     ),
     title: "Actualizado cuando cambia la ley",
     description:
-      "Cuando el gobierno ajusta el techo del IHSS o las tablas del ISR, nosotros actualizamos. Tu no tienes que hacer nada.",
+      "Cuando el gobierno ajusta el techo del IHSS o las tablas del ISR, nosotros actualizamos. Vos no tenés que hacer nada.",
   },
   {
     icon: (
@@ -36,7 +36,7 @@ const features = [
     ),
     title: "Reportes listos para tu contador",
     description:
-      "Planilla IHSS, reporte SAR, diario contable para Zoho, archivo bancario de dispersion. Un click y se descarga.",
+      "Planilla IHSS, reporte SAR, diario contable para Zoho, archivo bancario de dispersión. Un click y se descarga.",
   },
 ];
 
@@ -44,7 +44,7 @@ export function Solucion() {
   return (
     <section id="solucion" className="mx-auto max-w-4xl px-6 py-16 md:py-20">
       <p className="mb-10 text-sm font-medium uppercase tracking-wider text-landing-marca">
-        La solucion
+        La solución
       </p>
 
       <div className="space-y-0">

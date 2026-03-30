@@ -795,25 +795,28 @@ async function interactiveTradeFlow(
     );
 
     try {
-      const result = await clobClient.createAndPostOrder(
+      // Use market order (FOK) for immediate execution
+      const result = await clobClient.createAndPostMarketOrder(
         {
           tokenID: trade.tokenId,
-          price,
-          size,
+          amount: trade.amount, // amount in USDC to spend
           side: Side.BUY,
         },
         undefined,
-        OrderType.GTC,
+        OrderType.FOK, // Fill-or-Kill: executes immediately or cancels
       );
 
-      if (result?.orderID || result?.success !== false) {
-        console.log(`${GREEN}${BOLD}OK${RESET}`);
-        log(
-          `  Order ID: ${result?.orderID ?? "submitted"}`,
-        );
+      const response = typeof result === "string" ? JSON.parse(result) : result;
+      const orderId = response?.orderID ?? response?.orderIds?.[0] ?? null;
+      const status = response?.status ?? response?.success;
+
+      if (orderId || status === "matched" || status === true) {
+        console.log(`${GREEN}${BOLD}FILLED${RESET}`);
+        if (orderId) log(`  Order ID: ${orderId}`);
+        log(`  ${DIM}${JSON.stringify(response)}${RESET}`);
       } else {
-        console.log(`${RED}FAILED${RESET}`);
-        log(`  Response: ${JSON.stringify(result)}`);
+        console.log(`${YELLOW}SUBMITTED${RESET}`);
+        log(`  Response: ${JSON.stringify(response)}`);
       }
     } catch (err) {
       console.log(`${RED}ERROR${RESET}`);

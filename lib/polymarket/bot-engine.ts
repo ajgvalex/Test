@@ -1,16 +1,9 @@
 import type {
   PolymarketMarket,
-  TradeExecution,
   OrderBook,
-  BotConfig,
-  BotStatus,
-  TradingMode,
-  Position,
+  OrderSide,
   PendingOrder,
-  TradeRecord,
-  PortfolioSummary,
   StrategySignal,
-  TradingStrategy,
   PerformanceMetrics,
   TradeStats,
   BotEvent,
@@ -18,6 +11,75 @@ import type {
 } from "@/types/polymarket";
 
 import { PolymarketClient } from "@/lib/polymarket/client";
+
+// ---------------------------------------------------------------------------
+// Internal types (specific to the bot engine runtime)
+// ---------------------------------------------------------------------------
+
+type BotStatus = "idle" | "running" | "paused" | "error";
+type TradingMode = "PAPER" | "LIVE";
+
+interface BotConfig {
+  botId: string;
+  name: string;
+  apiUrl: string;
+  apiKey: string;
+  mode: TradingMode;
+  initialBalance?: number;
+  tickIntervalMs?: number;
+  watchMarketIds?: string[];
+  riskLimits?: {
+    maxPositionSize?: number;
+    maxDailyLoss?: number;
+    maxDrawdownPercent?: number;
+    maxTotalExposure?: number;
+  };
+}
+
+interface Position {
+  marketId: string;
+  tokenId: string;
+  side: OrderSide;
+  size: number;
+  avgEntryPrice: number;
+  currentPrice?: number;
+  unrealizedPnL: number;
+  stopLoss?: number;
+  openedAt: string;
+}
+
+interface TradeRecord {
+  id: string;
+  orderId: string;
+  marketId: string;
+  tokenId: string;
+  side: OrderSide;
+  size: number;
+  price: number;
+  pnl: number;
+  timestamp: string;
+}
+
+interface PortfolioSummary {
+  balance: number;
+  unrealizedPnL: number;
+  realizedPnL: number;
+  totalValue: number;
+  positionCount: number;
+  openOrderCount: number;
+  lastUpdated: string;
+}
+
+interface TradingStrategy {
+  evaluate(
+    markets: PolymarketMarket[],
+    context: {
+      positions: Map<string, Position>;
+      portfolio: PortfolioSummary;
+      openOrders: PendingOrder[];
+    },
+  ): Promise<StrategySignal[]>;
+}
 
 // ---------------------------------------------------------------------------
 // Event listener types

@@ -108,6 +108,8 @@ export interface PolymarketMarket {
   active: boolean;
   /** Whether the market has been resolved. */
   resolved: boolean;
+  /** Raw token data from the CLOB API (convenience accessor). */
+  tokens?: { token_id: string; outcome: string; price: number }[];
 }
 
 // -----------------------------------------------------------------------------
@@ -536,4 +538,90 @@ export interface WsSubscription {
   autoReconnect?: boolean;
   /** Delay before attempting reconnection, in milliseconds. */
   reconnectDelayMs?: number;
+}
+
+// -----------------------------------------------------------------------------
+// Order Book
+// -----------------------------------------------------------------------------
+
+/** A snapshot of the order book for a single token. */
+export interface OrderBook {
+  /** Bid levels sorted by price descending. */
+  bids: OrderBookLevel[];
+  /** Ask levels sorted by price ascending. */
+  asks: OrderBookLevel[];
+}
+
+// -----------------------------------------------------------------------------
+// Paginated API Response
+// -----------------------------------------------------------------------------
+
+/** Generic paginated response from the Polymarket CLOB API. */
+export interface PaginatedResponse<T> {
+  data: T[];
+  next_cursor?: string;
+}
+
+// -----------------------------------------------------------------------------
+// Bot Engine Types
+// -----------------------------------------------------------------------------
+
+/** Trading mode for the bot. */
+export type TradingMode = "PAPER" | "LIVE";
+
+/** A pending or submitted order tracked by the bot engine. */
+export interface PendingOrder {
+  id: string;
+  marketId: string;
+  tokenId: string;
+  side: OrderSide;
+  size: number;
+  price?: number;
+  reason?: string;
+  status: "pending" | "submitted" | "filled" | "rejected" | "cancelled";
+  createdAt: string;
+  filledAt?: string;
+  fillPrice?: number;
+}
+
+/** A signal produced by a strategy for the bot engine to execute. */
+export interface StrategySignal {
+  marketId: string;
+  tokenId: string;
+  side: OrderSide;
+  size: number;
+  price?: number;
+  reason: string;
+  urgency?: "low" | "medium" | "high";
+}
+
+/** High-level performance metrics. */
+export interface PerformanceMetrics {
+  totalPnL: number;
+  winRate: number;
+  sharpeRatio: number;
+  maxDrawdown: number;
+  totalTrades: number;
+  winCount: number;
+  lossCount: number;
+}
+
+/** Granular trade statistics. */
+export interface TradeStats {
+  totalTrades: number;
+  avgProfit: number;
+  avgLoss: number;
+  largestWin: number;
+  largestLoss: number;
+  profitFactor: number;
+}
+
+/** Event types emitted by the bot engine. */
+export type BotEventType = "trade" | "error" | "statusChange";
+
+/** An event emitted by the bot engine. */
+export interface BotEvent {
+  type: BotEventType;
+  timestamp: string;
+  data: Record<string, unknown>;
 }

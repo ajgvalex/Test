@@ -156,13 +156,38 @@ async function enrichMarketPrices(markets: ClobMarket[]): Promise<MarketWithPric
   const results: MarketWithPrice[] = [];
   const now = new Date();
 
+  // Debug: show first market's raw structure
+  if (markets.length > 0) {
+    const sample = markets[0];
+    log(`${DIM}Debug - First market raw fields:${RESET}`);
+    log(`${DIM}  question: ${sample.question}${RESET}`);
+    log(`${DIM}  condition_id: ${sample.condition_id}${RESET}`);
+    log(`${DIM}  active: ${sample.active}, closed: ${sample.closed}${RESET}`);
+    log(`${DIM}  end_date_iso: ${sample.end_date_iso}${RESET}`);
+    log(`${DIM}  tokens: ${JSON.stringify(sample.tokens?.slice(0, 2))}${RESET}`);
+    // Show all available field names
+    log(`${DIM}  all fields: ${Object.keys(sample).join(", ")}${RESET}`);
+  }
+
+  let skipNoTokens = 0;
+  let skipClosed = 0;
+  let skipExpired = 0;
+  let skipPriceFail = 0;
+  let skipExtremePrice = 0;
+
   for (const market of markets) {
-    if (!market.tokens || market.tokens.length === 0 || market.closed) continue;
+    if (!market.tokens || market.tokens.length === 0) { skipNoTokens++; continue; }
+    if (market.closed) { skipClosed++; continue; }
 
     // Skip markets whose end date has already passed
-    if (market.end_date_iso) {
-      const endDate = new Date(market.end_date_iso);
-      if (endDate < now) continue;
+    // Check multiple possible field names
+    const endDateStr = market.end_date_iso
+      ?? (market as any).end_date
+      ?? (market as any).endDate
+      ?? (market as any).game_start_time;
+    if (endDateStr) {
+      const endDate = new Date(endDateStr);
+      if (endDate < now) { skipExpired++; continue; }
     }
 
     const yesToken = market.tokens.find((t) => t.outcome === "Yes") ?? market.tokens[0];
@@ -174,19 +199,20 @@ async function enrichMarketPrices(markets: ClobMarket[]): Promise<MarketWithPric
     if (!yesPrice && yesToken?.token_id) {
       try {
         yesPrice = await getMidpoint(yesToken.token_id);
-        // Small delay to avoid rate limiting
         await new Promise((r) => setTimeout(r, 200));
       } catch {
+        skipPriceFail++;
         continue;
       }
     }
 
-    if (!yesPrice || yesPrice <= 0.02 || yesPrice >= 0.98) continue;
+    if (!yesPrice || yesPrice <= 0.02 || yesPrice >= 0.98) { skipExtremePrice++; continue; }
 
     const noPrice = noToken?.price ?? 1 - yesPrice;
-
     results.push({ market, yesPrice, noPrice });
   }
+
+  log(`${DIM}Skip reasons: no tokens=${skipNoTokens}, closed=${skipClosed}, expired=${skipExpired}, price fail=${skipPriceFail}, extreme price=${skipExtremePrice}${RESET}`);
 
   return results;
 }

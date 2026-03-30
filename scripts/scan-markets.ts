@@ -58,6 +58,9 @@ function parseArgs() {
     limit: 100,
     minEdge: 0.05, // minimum 5% edge to suggest
     balance: 50,
+    minBet: 1,     // minimum bet amount in USD
+    minReturn: 0,  // minimum expected return % (e.g. 0.30 = 30%)
+    minConf: "low" as "low" | "medium" | "high", // minimum confidence level
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -74,6 +77,17 @@ function parseArgs() {
       case "-b":
         opts.balance = Number(args[++i]);
         break;
+      case "--min-bet":
+        opts.minBet = Number(args[++i]);
+        break;
+      case "--min-return":
+      case "-r":
+        opts.minReturn = Number(args[++i]) / 100; // user enters 30, we store 0.30
+        break;
+      case "--min-conf":
+      case "-c":
+        opts.minConf = args[++i] as "low" | "medium" | "high";
+        break;
       case "--help":
       case "-h":
         console.log(`
@@ -82,10 +96,17 @@ Polymarket Market Scanner
 Analyzes active markets using AI to find mispriced opportunities.
 
 Options:
-  --limit, -l      Number of markets to fetch from API (default: 20)
-  --min-edge, -e   Minimum edge to show, e.g. 0.10 = 10% (default: 0.05)
+  --limit, -l      Number of markets to fetch (default: 100)
+  --min-edge, -e   Minimum edge %, e.g. 10 = 10% (default: 5)
   --balance, -b    Your balance for position sizing (default: 50)
+  --min-bet        Minimum suggested bet in USD (default: 1)
+  --min-return, -r Expected return %, e.g. 30 = 30% (default: 0)
+  --min-conf, -c   Minimum confidence: low, medium, high (default: low)
   --help, -h       Show this help
+
+Examples:
+  npx tsx scripts/scan-markets.ts --min-bet 5 --min-return 30 --min-conf medium
+  npx tsx scripts/scan-markets.ts -e 10 -r 50 -c high
 `);
         process.exit(0);
     }
@@ -523,7 +544,7 @@ async function main() {
 
   logHeader("Polymarket Market Scanner");
   log(`Fetching up to ${BOLD}${opts.limit}${RESET} markets`);
-  log(`Min edge: ${BOLD}${(opts.minEdge * 100).toFixed(0)}%${RESET}`);
+  log(`Min edge: ${BOLD}${(opts.minEdge * 100).toFixed(0)}%${RESET} | Min return: ${BOLD}${(opts.minReturn * 100).toFixed(0)}%${RESET} | Min bet: ${BOLD}$${opts.minBet}${RESET} | Min confidence: ${BOLD}${opts.minConf}${RESET}`);
   log(`Balance: ${BOLD}$${opts.balance}${RESET}`);
   console.log();
 
@@ -594,6 +615,7 @@ async function main() {
     marketPrice: number;
     estimatedProb: number;
     edge: number;
+    expectedReturn: number;
     side: "YES" | "NO";
     suggestedBet: number;
     confidence: string;
@@ -607,10 +629,23 @@ async function main() {
 
   console.log(`\n${BOLD}  All Markets Analyzed:${RESET}\n`);
 
+  const confRank = { low: 0, medium: 1, high: 2 };
+
   for (const { analysis, market, yesPrice } of allAnalyses) {
     const edge = Math.abs(analysis.estimatedProbability - yesPrice);
     const kelly = kellyBet(analysis.estimatedProbability, yesPrice, opts.balance);
-    const isOpportunity = edge >= opts.minEdge && analysis.confidence !== "low";
+
+    // Expected return: if you buy at marketPrice and true prob is estimatedProb
+    const buyPrice = kelly.side === "YES" ? yesPrice : 1 - yesPrice;
+    const expectedReturn = buyPrice > 0 ? (analysis.estimatedProbability > yesPrice
+      ? (analysis.estimatedProbability / buyPrice) - 1
+      : ((1 - analysis.estimatedProbability) / (1 - yesPrice)) - 1) : 0;
+
+    const meetsEdge = edge >= opts.minEdge;
+    const meetsConf = confRank[analysis.confidence] >= confRank[opts.minConf];
+    const meetsBet = kelly.suggestedBet >= opts.minBet;
+    const meetsReturn = expectedReturn >= opts.minReturn;
+    const isOpportunity = meetsEdge && meetsConf && meetsBet && meetsReturn;
 
     const edgeColor = isOpportunity ? GREEN : DIM;
     const confColor =
@@ -646,6 +681,7 @@ async function main() {
         marketPrice: yesPrice,
         estimatedProb: analysis.estimatedProbability,
         edge,
+        expectedReturn,
         side: kelly.side,
         suggestedBet: kelly.suggestedBet,
         confidence: analysis.confidence,
@@ -689,9 +725,11 @@ async function main() {
             ? `${YELLOW}News is mixed${RESET}`
             : `${DIM}No recent news${RESET}`;
 
+    const returnColor = opp.expectedReturn >= 0.5 ? GREEN : opp.expectedReturn >= 0.3 ? YELLOW : DIM;
+
     console.log(`  ${BOLD}${WHITE}${i + 1}. ${opp.question}${RESET}`);
     console.log(
-      `     Market: ${(opp.marketPrice * 100).toFixed(1)}%  |  AI estimate: ${(opp.estimatedProb * 100).toFixed(1)}%  |  Edge: ${edgeColor}${BOLD}${(opp.edge * 100).toFixed(1)}%${RESET}`,
+      `     Market: ${(opp.marketPrice * 100).toFixed(1)}%  |  AI estimate: ${(opp.estimatedProb * 100).toFixed(1)}%  |  Edge: ${edgeColor}${BOLD}${(opp.edge * 100).toFixed(1)}%${RESET}  |  Return: ${returnColor}${BOLD}${(opp.expectedReturn * 100).toFixed(0)}%${RESET}`,
     );
     console.log(
       `     Buy ${sideColor}${BOLD}${opp.side}${RESET}  |  Bet: ${GREEN}$${opp.suggestedBet.toFixed(2)}${RESET}  |  Confidence: ${opp.confidence}  |  ${newsLabel}`,
@@ -801,6 +839,7 @@ interface Opportunity {
   marketPrice: number;
   estimatedProb: number;
   edge: number;
+  expectedReturn: number;
   side: "YES" | "NO";
   suggestedBet: number;
   confidence: string;

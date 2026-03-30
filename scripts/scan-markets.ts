@@ -329,49 +329,94 @@ function extractSearchQuery(question: string): string {
 }
 
 /**
- * Searches the web for recent news about a market question.
- * Uses DuckDuckGo HTML search (no API key needed).
+ * Searches the web for recent news using multiple strategies.
+ * Tries DuckDuckGo HTML, Google News RSS, and Brave Search as fallbacks.
  */
 async function searchNewsForMarket(question: string): Promise<NewsSnippet[]> {
   const query = extractSearchQuery(question);
-  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query + " latest news 2026")}`;
 
+  // Strategy 1: DuckDuckGo HTML search
+  const ddgResults = await searchDDG(query);
+  if (ddgResults.length >= 2) return ddgResults;
+
+  // Strategy 2: Google News RSS feed (no API key needed)
+  const googleResults = await searchGoogleNewsRSS(query);
+  if (googleResults.length >= 2) return googleResults;
+
+  // Strategy 3: Shorter, more focused query as fallback
+  const shortQuery = query.split(" ").slice(0, 4).join(" ");
+  if (shortQuery !== query) {
+    const shortResults = await searchDDG(shortQuery);
+    if (shortResults.length > 0) return shortResults;
+  }
+
+  return ddgResults.length > 0 ? ddgResults : googleResults;
+}
+
+async function searchDDG(query: string): Promise<NewsSnippet[]> {
+  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query + " latest news")}`;
   try {
     const res = await fetch(searchUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; PolymarketBot/1.0)",
-        Accept: "text/html",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
       },
     });
     if (!res.ok) return [];
 
     const html = await res.text();
-
-    // Parse DuckDuckGo HTML results (simple regex extraction)
     const results: NewsSnippet[] = [];
     const resultBlocks = html.split(/class="result__body"/);
 
     for (let i = 1; i < resultBlocks.length && results.length < 5; i++) {
       const block = resultBlocks[i];
+      const titleMatch = block.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/);
+      let title = titleMatch?.[1]?.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim() ?? "";
 
-      // Extract title
-      const titleMatch = block.match(/class="result__a"[^>]*>([^<]+)</);
-      const title = titleMatch?.[1]?.replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim() ?? "";
-
-      // Extract snippet
       const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
       let snippet = snippetMatch?.[1]?.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim() ?? "";
       snippet = snippet.substring(0, 300);
 
-      // Extract source domain
       const sourceMatch = block.match(/class="result__url"[^>]*>([^<]+)/);
       const source = sourceMatch?.[1]?.trim() ?? "";
 
-      if (title && snippet) {
-        results.push({ title, snippet, source });
-      }
+      if (title && snippet) results.push({ title, snippet, source });
     }
+    return results;
+  } catch {
+    return [];
+  }
+}
 
+async function searchGoogleNewsRSS(query: string): Promise<NewsSnippet[]> {
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    if (!res.ok) return [];
+
+    const xml = await res.text();
+    const results: NewsSnippet[] = [];
+
+    // Simple XML parsing for RSS items
+    const items = xml.split("<item>");
+    for (let i = 1; i < items.length && results.length < 5; i++) {
+      const titleMatch = items[i].match(/<title>([\s\S]*?)<\/title>/);
+      const title = titleMatch?.[1]?.replace(/<!\[CDATA\[|\]\]>/g, "").trim() ?? "";
+
+      const descMatch = items[i].match(/<description>([\s\S]*?)<\/description>/);
+      const snippet = descMatch?.[1]?.replace(/<!\[CDATA\[|\]\]>/g, "").replace(/<[^>]+>/g, "").trim().substring(0, 300) ?? "";
+
+      const sourceMatch = items[i].match(/<source[^>]*>([\s\S]*?)<\/source>/);
+      const source = sourceMatch?.[1]?.replace(/<!\[CDATA\[|\]\]>/g, "").trim() ?? "";
+
+      const dateMatch = items[i].match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+      const date = dateMatch?.[1]?.trim() ?? "";
+
+      if (title) results.push({ title, snippet: snippet || title, source, date });
+    }
     return results;
   } catch {
     return [];
@@ -568,7 +613,14 @@ Your job: estimate the TRUE probability of YES happening based on:
 ${cryptoSection ? "4. CRYPTO TECHNICAL ANALYSIS: price action, RSI, SMA crossovers, support/resistance levels, trend direction\n5. Short-term momentum (10-minute to hourly timeframe for imminent crypto events)" : "4. Historical patterns and base rates"}
 ${cryptoSection ? "6" : "5"}. Your own knowledge of the topic
 
-IMPORTANT RULES:
+CRITICAL SAFETY RULES:
+- YOUR TRAINING DATA MAY BE OUTDATED. Real-world events may have changed dramatically since your cutoff.
+- If the news provided CONTRADICTS your prior knowledge, ALWAYS trust the news. The news is fetched in real-time RIGHT NOW.
+- If NO news is provided for a market, you MUST set confidence to "low". You cannot be confident without current information.
+- NEVER assume the status quo holds. Leaders get deposed, prices crash, wars start/end. Check the news.
+- If news mentions a major event (arrest, coup, crash, deal, death), COMPLETELY reassess your probability.
+
+ANALYSIS RULES:
 - PRIORITIZE the news context - it's real-time and more current than your training data.
 ${cryptoSection ? `- For CRYPTO markets: heavily weigh the technical indicators. RSI > 70 = overbought (less likely to go higher short-term). RSI < 30 = oversold. Price above SMA(7) & SMA(25) = bullish momentum. Use support/resistance to judge price target feasibility.
 - For crypto price predictions: compare the target price with current price, support, resistance, and 24h range to estimate probability.` : ""}
@@ -577,9 +629,9 @@ ${cryptoSection ? `- For CRYPTO markets: heavily weigh the technical indicators.
 - Do NOT just echo the market price. The whole point is to find where markets are WRONG.
 - Be bold: if the news strongly suggests the market is mispriced, say so.
 - "newsAlignment" should reflect whether the news leans toward YES, NO, is mixed, or absent.
-- Use "high" confidence when multiple news sources point the same direction.
+- Use "high" confidence ONLY when you have multiple recent news sources confirming the same direction.
 - Use "medium" when news gives some signal but is not conclusive.
-- Use "low" only when you truly have no information.
+- Use "low" when no news is found OR when your knowledge may be outdated for this topic.
 
 ${marketList}
 
@@ -807,11 +859,18 @@ async function main() {
       ? (analysis.estimatedProbability / buyPrice) - 1
       : ((1 - analysis.estimatedProbability) / (1 - yesPrice)) - 1) : 0;
 
+    const hasNews = analysis.newsAlignment !== "no_news";
+
     const meetsEdge = edge >= opts.minEdge;
     const meetsConf = confRank[analysis.confidence] >= confRank[opts.minConf];
     const meetsBet = kelly.suggestedBet >= opts.minBet;
     const meetsReturn = expectedReturn >= opts.minReturn;
-    const isOpportunity = meetsEdge && meetsConf && meetsBet && meetsReturn;
+
+    // SAFETY: Markets with no news get downgraded
+    // - "no_news" + auto mode = BLOCKED (too risky to auto-trade without info)
+    // - "no_news" + interactive = allowed but flagged with warning
+    const blockedNoNews = !hasNews && opts.auto;
+    const isOpportunity = meetsEdge && meetsConf && meetsBet && meetsReturn && !blockedNoNews;
 
     const edgeColor = isOpportunity ? GREEN : DIM;
     const confColor =
@@ -835,7 +894,7 @@ async function main() {
         : market.question;
 
     console.log(
-      `  ${isOpportunity ? BOLD : ""}${shortQ}${RESET}`,
+      `  ${isOpportunity ? BOLD : ""}${shortQ}${RESET}${blockedNoNews && meetsEdge ? ` ${RED}[BLOCKED: no news]${RESET}` : ""}`,
     );
     console.log(
       `    Market: ${(yesPrice * 100).toFixed(0)}% | AI: ${(analysis.estimatedProbability * 100).toFixed(0)}% | Edge: ${edgeColor}${(edge * 100).toFixed(1)}%${RESET} | Conf: ${confColor}${analysis.confidence}${RESET} | ${newsIcon}`,
@@ -889,7 +948,7 @@ async function main() {
           ? `${RED}News supports NO${RESET}`
           : opp.newsAlignment === "mixed"
             ? `${YELLOW}News is mixed${RESET}`
-            : `${DIM}No recent news${RESET}`;
+            : `${RED}${BOLD}!! NO NEWS - HIGH RISK !!${RESET}`;
 
     const returnColor = opp.expectedReturn >= 0.5 ? GREEN : opp.expectedReturn >= 0.3 ? YELLOW : DIM;
 

@@ -65,6 +65,7 @@ function parseArgs() {
     aggressive: false,   // aggressive Kelly sizing
     maxTrades: 5,        // max trades per run in auto mode
     maxPerTrade: 0,      // max USD per trade (0 = no cap, use Kelly)
+    crypto: false,       // filter for crypto markets + BTC technical analysis
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -98,6 +99,9 @@ function parseArgs() {
       case "--aggressive":
         opts.aggressive = true;
         break;
+      case "--crypto":
+        opts.crypto = true;
+        break;
       case "--max-trades":
         opts.maxTrades = Number(args[++i]);
         break;
@@ -125,9 +129,13 @@ Auto-trade mode:
   --max-trades       Max trades per run (default: 5)
   --max-per-trade    Max USD per single trade (default: no cap)
 
+Crypto mode:
+  --crypto           Filter for crypto markets only + real-time BTC/ETH analysis
+
 Examples:
   npx tsx scripts/scan-markets.ts --min-bet 5 -r 30 -c medium
   npx tsx scripts/scan-markets.ts --auto --aggressive -r 20 -c medium --max-trades 3
+  npx tsx scripts/scan-markets.ts --crypto --auto --aggressive -c medium
 `);
         process.exit(0);
     }
@@ -190,18 +198,22 @@ async function fetchJson<T>(baseUrl: string, path: string, query?: Record<string
   return (await res.json()) as T;
 }
 
-async function getActiveMarkets(limit: number): Promise<ClobMarket[]> {
+async function getActiveMarkets(limit: number, cryptoOnly = false): Promise<ClobMarket[]> {
   // Use Gamma API - returns currently active, popular markets with prices
+  const query: Record<string, string> = {
+    limit: String(limit),
+    active: "true",
+    closed: "false",
+    order: "volume",
+    ascending: "false",
+  };
+  // Gamma API supports tag filtering
+  if (cryptoOnly) query.tag = "crypto";
+
   const gammaMarkets = await fetchJson<GammaMarket[]>(
     GAMMA_BASE,
     "/markets",
-    {
-      limit: String(limit),
-      active: "true",
-      closed: "false",
-      order: "volume",
-      ascending: "false",
-    },
+    query,
   );
 
   log(`Gamma API returned ${BOLD}${gammaMarkets.length}${RESET} active markets`);
@@ -397,8 +409,113 @@ async function fetchNewsForMarkets(
 }
 
 // -----------------------------------------------------------------------------
+// Crypto technical analysis - real-time BTC/ETH price data
+// -----------------------------------------------------------------------------
+
+interface CryptoTA {
+  symbol: string;
+  price: number;
+  change24h: number;
+  high24h: number;
+  low24h: number;
+  volume24h: number;
+  sma7: number;   // 7-period simple moving average (hourly)
+  sma25: number;  // 25-period SMA
+  rsi14: number;  // 14-period RSI
+  trend: "bullish" | "bearish" | "neutral";
+  support: number;
+  resistance: number;
+}
+
+function computeRSI(closes: number[], period = 14): number {
+  if (closes.length < period + 1) return 50;
+  let gains = 0, losses = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) gains += diff;
+    else losses += Math.abs(diff);
+  }
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+function computeSMA(values: number[], period: number): number {
+  const slice = values.slice(-period);
+  return slice.reduce((s, v) => s + v, 0) / slice.length;
+}
+
+async function fetchCryptoTA(): Promise<CryptoTA[]> {
+  const results: CryptoTA[] = [];
+
+  for (const symbol of ["BTC", "ETH"]) {
+    try {
+      // Binance public API: klines (candlesticks) - last 50 hours
+      const klineUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=1h&limit=50`;
+      const klineRes = await fetch(klineUrl);
+      if (!klineRes.ok) continue;
+      const klines = await klineRes.json() as number[][];
+
+      // Each kline: [openTime, open, high, low, close, volume, ...]
+      const closes = klines.map((k: any) => parseFloat(k[4]));
+      const highs = klines.map((k: any) => parseFloat(k[2]));
+      const lows = klines.map((k: any) => parseFloat(k[3]));
+      const volumes = klines.map((k: any) => parseFloat(k[5]));
+
+      const currentPrice = closes[closes.length - 1];
+      const price24hAgo = closes.length >= 24 ? closes[closes.length - 24] : closes[0];
+      const change24h = ((currentPrice - price24hAgo) / price24hAgo) * 100;
+
+      const high24h = Math.max(...highs.slice(-24));
+      const low24h = Math.min(...lows.slice(-24));
+      const volume24h = volumes.slice(-24).reduce((s, v) => s + v, 0);
+
+      const sma7 = computeSMA(closes, 7);
+      const sma25 = computeSMA(closes, 25);
+      const rsi14 = computeRSI(closes, 14);
+
+      // Simple trend detection
+      let trend: "bullish" | "bearish" | "neutral" = "neutral";
+      if (currentPrice > sma7 && sma7 > sma25 && rsi14 > 50) trend = "bullish";
+      else if (currentPrice < sma7 && sma7 < sma25 && rsi14 < 50) trend = "bearish";
+
+      // Support/resistance from recent highs/lows
+      const support = Math.min(...lows.slice(-12));
+      const resistance = Math.max(...highs.slice(-12));
+
+      results.push({
+        symbol, price: currentPrice, change24h, high24h, low24h, volume24h,
+        sma7, sma25, rsi14, trend, support, resistance,
+      });
+    } catch {
+      // API unavailable, skip
+    }
+  }
+
+  return results;
+}
+
+function formatCryptoTA(taList: CryptoTA[]): string {
+  if (taList.length === 0) return "";
+
+  let text = "\n=== REAL-TIME CRYPTO TECHNICAL ANALYSIS ===\n";
+  for (const ta of taList) {
+    const trendEmoji = ta.trend === "bullish" ? "UP" : ta.trend === "bearish" ? "DOWN" : "SIDEWAYS";
+    text += `\n${ta.symbol}/USDT: $${ta.price.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+  24h Change: ${ta.change24h > 0 ? "+" : ""}${ta.change24h.toFixed(2)}%
+  24h Range: $${ta.low24h.toLocaleString()} - $${ta.high24h.toLocaleString()}
+  SMA(7h): $${ta.sma7.toFixed(0)} | SMA(25h): $${ta.sma25.toFixed(0)}
+  RSI(14): ${ta.rsi14.toFixed(1)} ${ta.rsi14 > 70 ? "(OVERBOUGHT)" : ta.rsi14 < 30 ? "(OVERSOLD)" : ""}
+  Trend: ${trendEmoji} | Support: $${ta.support.toLocaleString()} | Resistance: $${ta.resistance.toLocaleString()}`;
+  }
+  return text;
+}
+
+// -----------------------------------------------------------------------------
 // Claude batch analysis (analyze multiple markets in one call)
-// Now enriched with real-time news context
+// Now enriched with real-time news context + crypto TA
 // -----------------------------------------------------------------------------
 
 const anthropic = new Anthropic();
@@ -415,7 +532,10 @@ interface MarketAnalysis {
 async function analyzeMarketBatch(
   markets: { question: string; description: string; yesPrice: number }[],
   newsContext: Map<string, NewsSnippet[]>,
+  cryptoTA: CryptoTA[] = [],
 ): Promise<MarketAnalysis[]> {
+  const cryptoSection = cryptoTA.length > 0 ? formatCryptoTA(cryptoTA) : "";
+
   const marketList = markets
     .map((m, i) => {
       const news = newsContext.get(m.question) ?? [];
@@ -437,19 +557,21 @@ ${newsSection}`;
     messages: [
       {
         role: "user",
-        content: `You are an expert prediction market analyst and geopolitical researcher. Today is ${new Date().toISOString().slice(0, 10)}.
+        content: `You are an expert prediction market analyst, geopolitical researcher, and crypto technical analyst. Today is ${new Date().toISOString().slice(0, 10)}. Current time: ${new Date().toISOString().slice(11, 16)} UTC.
 
 For each market below, you are given the question, current market price, and REAL-TIME NEWS snippets gathered just now from the internet. Use this news context heavily in your analysis.
-
+${cryptoSection ? `\nYou also have LIVE CRYPTO TECHNICAL ANALYSIS data below. For any crypto-related market, use this data heavily:\n${cryptoSection}\n` : ""}
 Your job: estimate the TRUE probability of YES happening based on:
 1. The REAL-TIME NEWS provided (most important - this is current information)
 2. Geopolitical and economic context implied by the news
 3. Social sentiment and trends visible in the headlines
-4. Historical patterns and base rates
-5. Your own knowledge of the topic
+${cryptoSection ? "4. CRYPTO TECHNICAL ANALYSIS: price action, RSI, SMA crossovers, support/resistance levels, trend direction\n5. Short-term momentum (10-minute to hourly timeframe for imminent crypto events)" : "4. Historical patterns and base rates"}
+${cryptoSection ? "6" : "5"}. Your own knowledge of the topic
 
 IMPORTANT RULES:
 - PRIORITIZE the news context - it's real-time and more current than your training data.
+${cryptoSection ? `- For CRYPTO markets: heavily weigh the technical indicators. RSI > 70 = overbought (less likely to go higher short-term). RSI < 30 = oversold. Price above SMA(7) & SMA(25) = bullish momentum. Use support/resistance to judge price target feasibility.
+- For crypto price predictions: compare the target price with current price, support, resistance, and 24h range to estimate probability.` : ""}
 - Look for signals: government announcements, polls, expert opinions, economic indicators, diplomatic moves.
 - Consider sentiment: are headlines mostly positive or negative about the outcome?
 - Do NOT just echo the market price. The whole point is to find where markets are WRONG.
@@ -577,9 +699,9 @@ async function main() {
   log(`Balance: ${BOLD}$${opts.balance}${RESET}${opts.aggressive ? ` | Kelly: ${YELLOW}half-Kelly (aggressive)${RESET}` : ""}`);
   console.log();
 
-  // 1. Fetch open markets from Gamma API (popular, active markets with prices)
-  log("Fetching active markets from Polymarket...");
-  const openMarkets = await getActiveMarkets(opts.limit);
+  // 1. Fetch open markets from Gamma API
+  log(`Fetching active ${opts.crypto ? "CRYPTO " : ""}markets from Polymarket...`);
+  const openMarkets = await getActiveMarkets(opts.limit, opts.crypto);
   log(`Found ${BOLD}${openMarkets.length}${RESET} open, tradeable markets`);
 
   // 2. Get prices for each market
@@ -594,6 +716,21 @@ async function main() {
     return;
   }
 
+  // 2b. If crypto mode, fetch live BTC/ETH technical analysis
+  let cryptoTA: CryptoTA[] = [];
+  if (opts.crypto) {
+    log(`\nFetching live BTC/ETH technical analysis from Binance...`);
+    cryptoTA = await fetchCryptoTA();
+    if (cryptoTA.length > 0) {
+      for (const ta of cryptoTA) {
+        const trendColor = ta.trend === "bullish" ? GREEN : ta.trend === "bearish" ? RED : YELLOW;
+        log(`  ${BOLD}${ta.symbol}${RESET} $${ta.price.toLocaleString("en-US", {maximumFractionDigits: 2})} | 24h: ${ta.change24h > 0 ? GREEN + "+" : RED}${ta.change24h.toFixed(2)}%${RESET} | RSI: ${ta.rsi14.toFixed(0)} | Trend: ${trendColor}${ta.trend}${RESET}`);
+      }
+    } else {
+      log(`  ${YELLOW}Could not fetch crypto data (Binance API unavailable)${RESET}`);
+    }
+  }
+
   // 3. Search real-time news for each market
   log(`\nSearching real-time news for ${BOLD}${marketsWithPrices.length}${RESET} markets...`);
   const newsContext = await fetchNewsForMarkets(
@@ -604,7 +741,7 @@ async function main() {
     `Found news for ${GREEN}${BOLD}${marketsWithNews}${RESET} of ${marketsWithPrices.length} markets`,
   );
 
-  // 4. Analyze markets in batches with Claude (enriched with news)
+  // 4. Analyze markets in batches with Claude (enriched with news + crypto TA)
   const BATCH_SIZE = 8;
   const allAnalyses: {
     analysis: MarketAnalysis;
@@ -618,7 +755,7 @@ async function main() {
     const totalBatches = Math.ceil(marketsWithPrices.length / BATCH_SIZE);
 
     log(
-      `Analyzing batch ${BOLD}${batchNum}/${totalBatches}${RESET} (${batch.length} markets) with Claude + news context...`,
+      `Analyzing batch ${BOLD}${batchNum}/${totalBatches}${RESET} (${batch.length} markets) with Claude${opts.crypto ? " + crypto TA" : ""} + news...`,
     );
 
     const batchInput = batch.map((m) => ({
@@ -627,7 +764,7 @@ async function main() {
       yesPrice: m.yesPrice,
     }));
 
-    const analyses = await analyzeMarketBatch(batchInput, newsContext);
+    const analyses = await analyzeMarketBatch(batchInput, newsContext, cryptoTA);
 
     for (let j = 0; j < analyses.length && j < batch.length; j++) {
       allAnalyses.push({

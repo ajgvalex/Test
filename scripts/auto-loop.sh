@@ -16,13 +16,13 @@ if [ -f .env.local ]; then
   set +a
 fi
 
-INTERVAL=3600  # 60 minutes in seconds
+INTERVAL=900  # 15 minutes in seconds
 LOG="auto-trade.log"
 
 echo "============================================" | tee -a "$LOG"
 echo "Auto-trading loop started at $(date)"        | tee -a "$LOG"
 echo "PID: $$"                                      | tee -a "$LOG"
-echo "Interval: ${INTERVAL}s (60 min)"             | tee -a "$LOG"
+echo "Interval: ${INTERVAL}s (15 min)"             | tee -a "$LOG"
 echo "============================================" | tee -a "$LOG"
 
 while true; do
@@ -43,7 +43,7 @@ while true; do
     2>&1 | tee -a "$LOG"
 
   echo ""                                           | tee -a "$LOG"
-  echo ">>> Done. Next run in 60 minutes. <<<"      | tee -a "$LOG"
+  echo ">>> Done. Next run in 15 minutes. <<<"      | tee -a "$LOG"
   echo ""                                           | tee -a "$LOG"
 
   sleep $INTERVAL

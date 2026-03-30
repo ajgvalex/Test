@@ -15,7 +15,11 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import * as readline from "readline";
 import Anthropic from "@anthropic-ai/sdk";
+import { ethers } from "ethers";
+import { ClobClient } from "@polymarket/clob-client";
+import { Chain, Side, OrderType } from "@polymarket/clob-client/dist/types";
 
 // -----------------------------------------------------------------------------
 // Load .env.local automatically
@@ -495,6 +499,265 @@ async function main() {
   console.log(`  Total suggested: $${totalSuggested.toFixed(2)} of $${opts.balance}`);
   console.log();
   console.log(`  ${YELLOW}${BOLD}DISCLAIMER:${RESET} ${YELLOW}AI analysis, not financial advice. DYOR.${RESET}\n`);
+
+  // 7. Interactive trade execution
+  const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
+  if (!privateKey) {
+    log(`${DIM}Set POLYMARKET_PRIVATE_KEY in .env.local to enable trade execution.${RESET}`);
+    return;
+  }
+
+  await interactiveTradeFlow(opportunities, marketsWithPrices);
+}
+
+// -----------------------------------------------------------------------------
+// Interactive prompt helpers
+// -----------------------------------------------------------------------------
+
+function ask(question: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Trade execution with Polymarket CLOB
+// -----------------------------------------------------------------------------
+
+async function initClobClient(): Promise<ClobClient> {
+  const privateKey = process.env.POLYMARKET_PRIVATE_KEY!;
+  const host = process.env.POLYMARKET_API_URL ?? "https://clob.polymarket.com";
+
+  // Create ethers wallet as signer
+  const wallet = new ethers.Wallet(privateKey);
+
+  // Create client without creds first, then derive them
+  const clientForDerive = new ClobClient(host, Chain.POLYGON, wallet);
+
+  log("Deriving API credentials from your wallet...");
+  const creds = await clientForDerive.createOrDeriveApiKey();
+  log(`API credentials derived successfully`);
+
+  // Create authenticated client
+  return new ClobClient(host, Chain.POLYGON, wallet, creds);
+}
+
+interface Opportunity {
+  question: string;
+  marketPrice: number;
+  estimatedProb: number;
+  edge: number;
+  side: "YES" | "NO";
+  suggestedBet: number;
+  confidence: string;
+  reasoning: string;
+  keyFactors: string[];
+  conditionId: string;
+}
+
+async function interactiveTradeFlow(
+  opportunities: Opportunity[],
+  marketsWithPrices: MarketWithPrice[],
+) {
+  console.log(`\n${BOLD}${CYAN}${"=".repeat(70)}${RESET}`);
+  console.log(`${BOLD}${CYAN}  Trade Execution${RESET}`);
+  console.log(`${BOLD}${CYAN}${"=".repeat(70)}${RESET}\n`);
+
+  const answer = await ask(
+    `  Do you want to place trades? (${GREEN}yes${RESET}/${RED}no${RESET}): `,
+  );
+
+  if (answer.toLowerCase() !== "yes" && answer.toLowerCase() !== "y") {
+    log("No trades placed. Goodbye!");
+    return;
+  }
+
+  // Ask which opportunities to trade
+  console.log();
+  console.log(
+    `  Enter the numbers of the opportunities you want to trade`,
+  );
+  console.log(
+    `  ${DIM}(comma-separated, e.g. "1,3" or "all"):${RESET}`,
+  );
+
+  const selection = await ask(`  Selection: `);
+
+  let selectedIndices: number[];
+  if (selection.toLowerCase() === "all") {
+    selectedIndices = opportunities.map((_, i) => i);
+  } else {
+    selectedIndices = selection
+      .split(",")
+      .map((s) => parseInt(s.trim()) - 1)
+      .filter((i) => i >= 0 && i < opportunities.length);
+  }
+
+  if (selectedIndices.length === 0) {
+    log(`${YELLOW}No valid selections. Exiting.${RESET}`);
+    return;
+  }
+
+  // For each selected opportunity, confirm amount
+  interface TradeToExecute {
+    opportunity: Opportunity;
+    amount: number;
+    tokenId: string;
+  }
+
+  const trades: TradeToExecute[] = [];
+
+  for (const idx of selectedIndices) {
+    const opp = opportunities[idx];
+    const sideColor = opp.side === "YES" ? GREEN : RED;
+
+    console.log(
+      `\n  ${BOLD}${opp.question}${RESET}`,
+    );
+    console.log(
+      `  Buy ${sideColor}${BOLD}${opp.side}${RESET} at ${(opp.marketPrice * 100).toFixed(1)}% | Suggested: $${opp.suggestedBet.toFixed(2)}`,
+    );
+
+    const amountStr = await ask(
+      `  Amount to bet (or 'skip'): $`,
+    );
+
+    if (amountStr.toLowerCase() === "skip") continue;
+
+    const amount = parseFloat(amountStr);
+    if (isNaN(amount) || amount <= 0) {
+      console.log(`  ${RED}Invalid amount, skipping.${RESET}`);
+      continue;
+    }
+
+    // Find the right token ID
+    const marketData = marketsWithPrices.find(
+      (m) => m.market.condition_id === opp.conditionId,
+    );
+    if (!marketData) {
+      console.log(`  ${RED}Could not find market data, skipping.${RESET}`);
+      continue;
+    }
+
+    const tokenForSide =
+      opp.side === "YES"
+        ? marketData.market.tokens.find((t) => t.outcome === "Yes") ??
+          marketData.market.tokens[0]
+        : marketData.market.tokens.find((t) => t.outcome === "No") ??
+          marketData.market.tokens[1];
+
+    if (!tokenForSide) {
+      console.log(`  ${RED}Could not find token for ${opp.side}, skipping.${RESET}`);
+      continue;
+    }
+
+    trades.push({
+      opportunity: opp,
+      amount,
+      tokenId: tokenForSide.token_id,
+    });
+  }
+
+  if (trades.length === 0) {
+    log("No trades to execute. Goodbye!");
+    return;
+  }
+
+  // Final confirmation
+  console.log(`\n${BOLD}${YELLOW}${"─".repeat(70)}${RESET}`);
+  console.log(`${BOLD}${YELLOW}  Order Summary (REAL MONEY)${RESET}`);
+  console.log(`${BOLD}${YELLOW}${"─".repeat(70)}${RESET}\n`);
+
+  let totalCost = 0;
+  for (const trade of trades) {
+    const sideColor = trade.opportunity.side === "YES" ? GREEN : RED;
+    const price =
+      trade.opportunity.side === "YES"
+        ? trade.opportunity.marketPrice
+        : 1 - trade.opportunity.marketPrice;
+    const shares = trade.amount / price;
+
+    console.log(
+      `  Buy ${sideColor}${BOLD}${trade.opportunity.side}${RESET} | $${trade.amount.toFixed(2)} | ~${shares.toFixed(1)} shares @ ${(price * 100).toFixed(1)}c`,
+    );
+    console.log(`  ${DIM}${trade.opportunity.question}${RESET}`);
+    totalCost += trade.amount;
+  }
+
+  console.log(`\n  ${BOLD}Total: $${totalCost.toFixed(2)}${RESET}\n`);
+
+  const confirm = await ask(
+    `  ${YELLOW}${BOLD}Confirm execution? This uses REAL money. (yes/no): ${RESET}`,
+  );
+
+  if (confirm.toLowerCase() !== "yes") {
+    log("Cancelled. No trades placed.");
+    return;
+  }
+
+  // Execute trades
+  log("Initializing Polymarket client...");
+  let clobClient: ClobClient;
+  try {
+    clobClient = await initClobClient();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`${RED}Failed to initialize client: ${msg}${RESET}`);
+    return;
+  }
+
+  for (const trade of trades) {
+    const opp = trade.opportunity;
+    const price =
+      opp.side === "YES" ? opp.marketPrice : 1 - opp.marketPrice;
+    const size = trade.amount / price;
+
+    const shortQ =
+      opp.question.length > 45
+        ? opp.question.substring(0, 45) + "..."
+        : opp.question;
+
+    process.stdout.write(
+      `  Placing order: ${opp.side} ${shortQ} ($${trade.amount.toFixed(2)})... `,
+    );
+
+    try {
+      const result = await clobClient.createAndPostOrder(
+        {
+          tokenID: trade.tokenId,
+          price,
+          size: Math.floor(size * 100) / 100, // round down to 2 decimals
+          side: Side.BUY,
+        },
+        undefined,
+        OrderType.GTC,
+      );
+
+      if (result?.orderID || result?.success !== false) {
+        console.log(`${GREEN}${BOLD}OK${RESET}`);
+        log(
+          `  Order ID: ${result?.orderID ?? "submitted"}`,
+        );
+      } else {
+        console.log(`${RED}FAILED${RESET}`);
+        log(`  Response: ${JSON.stringify(result)}`);
+      }
+    } catch (err) {
+      console.log(`${RED}ERROR${RESET}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`  ${RED}${msg}${RESET}`);
+    }
+  }
+
+  console.log();
+  log(`${GREEN}${BOLD}Done! Check your positions at polymarket.com${RESET}`);
 }
 
 main().catch((err) => {

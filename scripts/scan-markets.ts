@@ -93,10 +93,11 @@ Options:
 }
 
 // -----------------------------------------------------------------------------
-// Polymarket API
+// Polymarket APIs
 // -----------------------------------------------------------------------------
 
-const API_BASE = process.env.POLYMARKET_API_URL ?? "https://clob.polymarket.com";
+const CLOB_BASE = process.env.POLYMARKET_API_URL ?? "https://clob.polymarket.com";
+const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
 interface ClobToken {
   token_id: string;
@@ -115,8 +116,25 @@ interface ClobMarket {
   tokens: ClobToken[];
 }
 
-async function fetchJson<T>(path: string, query?: Record<string, string>): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`);
+// Gamma API returns richer market data with current prices
+interface GammaMarket {
+  id: string;
+  question: string;
+  description: string;
+  conditionId: string;
+  slug: string;
+  endDate: string;
+  active: boolean;
+  closed: boolean;
+  volume: number;
+  liquidity: number;
+  outcomePrices: string; // JSON string like "[0.55, 0.45]"
+  outcomes: string; // JSON string like '["Yes","No"]'
+  clobTokenIds: string; // JSON string like '["tokenid1","tokenid2"]'
+}
+
+async function fetchJson<T>(baseUrl: string, path: string, query?: Record<string, string>): Promise<T> {
+  const url = new URL(`${baseUrl}${path}`);
   if (query) {
     for (const [k, v] of Object.entries(query)) {
       if (v !== undefined) url.searchParams.set(k, v);
@@ -129,55 +147,60 @@ async function fetchJson<T>(path: string, query?: Record<string, string>): Promi
   return (await res.json()) as T;
 }
 
-async function getActiveMarkets(targetCount: number): Promise<ClobMarket[]> {
-  // The API returns old/closed markets first, so we need to paginate
-  // and filter until we have enough open markets
-  const allOpen: ClobMarket[] = [];
-  let cursor: string | undefined;
-  let pages = 0;
-  const MAX_PAGES = 20;
+async function getActiveMarkets(limit: number): Promise<ClobMarket[]> {
+  // Use Gamma API - returns currently active, popular markets with prices
+  const gammaMarkets = await fetchJson<GammaMarket[]>(
+    GAMMA_BASE,
+    "/markets",
+    {
+      limit: String(limit),
+      active: "true",
+      closed: "false",
+      order: "volume",
+      ascending: "false",
+    },
+  );
 
-  while (allOpen.length < targetCount && pages < MAX_PAGES) {
-    pages++;
-    const query: Record<string, string> = { limit: "100" };
-    if (cursor) query.next_cursor = cursor;
+  log(`Gamma API returned ${BOLD}${gammaMarkets.length}${RESET} active markets`);
 
-    const data = await fetchJson<
-      ClobMarket[] | { data: ClobMarket[]; next_cursor?: string }
-    >("/markets", query);
+  // Convert to ClobMarket format with prices
+  const now = new Date();
+  return gammaMarkets
+    .filter((m) => {
+      if (!m.conditionId || !m.clobTokenIds) return false;
+      if (m.endDate && new Date(m.endDate) < now) return false;
+      return true;
+    })
+    .map((m) => {
+      let prices: number[] = [];
+      let outcomes: string[] = [];
+      let tokenIds: string[] = [];
 
-    const markets = Array.isArray(data) ? data : data.data ?? [];
-    const nextCursor = Array.isArray(data) ? undefined : data.next_cursor;
+      try { prices = JSON.parse(m.outcomePrices); } catch { /* empty */ }
+      try { outcomes = JSON.parse(m.outcomes); } catch { /* empty */ }
+      try { tokenIds = JSON.parse(m.clobTokenIds); } catch { /* empty */ }
 
-    if (markets.length === 0) break;
+      const tokens: ClobToken[] = outcomes.map((outcome, i) => ({
+        token_id: tokenIds[i] ?? "",
+        outcome,
+        price: prices[i] ?? 0,
+      }));
 
-    // Filter: only open, not closed, accepting orders
-    const now = new Date();
-    for (const m of markets) {
-      if (m.closed) continue;
-      if (!(m as any).accepting_orders) continue;
-
-      // Skip expired
-      const endDate = m.end_date_iso ?? (m as any).end_date;
-      if (endDate) {
-        const d = new Date(endDate);
-        if (d < now) continue;
-      }
-
-      allOpen.push(m);
-      if (allOpen.length >= targetCount) break;
-    }
-
-    if (!nextCursor) break;
-    cursor = nextCursor;
-    log(`${DIM}  Page ${pages}: ${markets.length} fetched, ${allOpen.length} open so far...${RESET}`);
-  }
-
-  return allOpen;
+      return {
+        condition_id: m.conditionId,
+        question: m.question,
+        description: m.description ?? "",
+        market_slug: m.slug ?? "",
+        end_date_iso: m.endDate ?? "",
+        active: m.active,
+        closed: m.closed,
+        tokens,
+      };
+    });
 }
 
 async function getMidpoint(tokenId: string): Promise<number> {
-  const data = await fetchJson<{ mid: number }>("/midpoint", { token_id: tokenId });
+  const data = await fetchJson<{ mid: number }>(CLOB_BASE, "/midpoint", { token_id: tokenId });
   return data.mid;
 }
 
@@ -373,8 +396,8 @@ async function main() {
   log(`Balance: ${BOLD}$${opts.balance}${RESET}`);
   console.log();
 
-  // 1. Fetch open markets (paginates to find non-closed, non-expired ones)
-  log("Fetching open markets from Polymarket (this may take a moment)...");
+  // 1. Fetch open markets from Gamma API (popular, active markets with prices)
+  log("Fetching active markets from Polymarket...");
   const openMarkets = await getActiveMarkets(opts.limit);
   log(`Found ${BOLD}${openMarkets.length}${RESET} open, tradeable markets`);
 

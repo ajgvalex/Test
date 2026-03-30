@@ -12,7 +12,7 @@ export function CtaFinal() {
         </h2>
 
         <p className="mt-4 text-base font-light text-landing-noche/60">
-          Empezá gratis. Sin contratos. Sin letra pequeña.
+          Empieza gratis. Sin contratos. Sin letra pequeña.
         </p>
 
         <Link
@@ -23,7 +23,7 @@ export function CtaFinal() {
         </Link>
 
         <p className="mt-4 text-xs text-landing-noche/40">
-          30 días gratis &middot; Cancelá cuando quieras
+          30 días gratis &middot; Cancela cuando quieras
         </p>
       </div>
     </section>

@@ -9,14 +9,14 @@ export function Hero() {
         </p>
 
         <h1 className="font-serif text-3xl leading-tight text-landing-noche md:text-5xl md:leading-tight">
-          ¿Cuánto le está costando tu planilla{" "}
+          ¿Cuánto te está costando tu planilla{" "}
           <em className="not-italic" style={{ fontStyle: "italic" }}>
             sin que lo sepas?
           </em>
         </h1>
 
         <p className="mx-auto mt-6 max-w-lg text-lg font-light leading-relaxed text-landing-noche/70">
-          IHSS, RAP, ISR, INFOP, aguinaldo, catorceavo... Si los calculás a
+          IHSS, RAP, ISR, INFOP, aguinaldo, catorceavo... Si los calculas a
           mano o en Excel, estás perdiendo dinero. O pagando de más. O las dos
           cosas.
         </p>

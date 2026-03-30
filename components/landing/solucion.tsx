@@ -26,7 +26,7 @@ const features = [
     ),
     title: "Actualizado cuando cambia la ley",
     description:
-      "Cuando el gobierno ajusta el techo del IHSS o las tablas del ISR, nosotros actualizamos. Vos no tenés que hacer nada.",
+      "Cuando el gobierno ajusta el techo del IHSS o las tablas del ISR, nosotros actualizamos. Tú no tienes que hacer nada.",
   },
   {
     icon: (

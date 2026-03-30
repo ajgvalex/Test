@@ -731,11 +731,12 @@ async function interactiveTradeFlow(
   let totalCost = 0;
   for (const trade of trades) {
     const sideColor = trade.opportunity.side === "YES" ? GREEN : RED;
-    const price =
+    const rawPrice =
       trade.opportunity.side === "YES"
         ? trade.opportunity.marketPrice
         : 1 - trade.opportunity.marketPrice;
-    const shares = trade.amount / price;
+    const price = Math.round(rawPrice * 100) / 100;
+    const shares = price > 0 ? trade.amount / price : 0;
 
     console.log(
       `  Buy ${sideColor}${BOLD}${trade.opportunity.side}${RESET} | $${trade.amount.toFixed(2)} | ~${shares.toFixed(1)} shares @ ${(price * 100).toFixed(1)}c`,
@@ -768,9 +769,21 @@ async function interactiveTradeFlow(
 
   for (const trade of trades) {
     const opp = trade.opportunity;
-    const price =
+    // Round price to nearest cent (CLOB requires tick size of 0.01)
+    const rawPrice =
       opp.side === "YES" ? opp.marketPrice : 1 - opp.marketPrice;
-    const size = trade.amount / price;
+    const price = Math.round(rawPrice * 100) / 100;
+
+    if (price <= 0 || price >= 1) {
+      log(`${RED}  Skipping ${opp.question.substring(0, 40)}... (invalid price ${price})${RESET}`);
+      continue;
+    }
+
+    const size = Math.floor((trade.amount / price) * 100) / 100;
+    if (!size || size <= 0 || !isFinite(size)) {
+      log(`${RED}  Skipping ${opp.question.substring(0, 40)}... (invalid size)${RESET}`);
+      continue;
+    }
 
     const shortQ =
       opp.question.length > 45
@@ -786,7 +799,7 @@ async function interactiveTradeFlow(
         {
           tokenID: trade.tokenId,
           price,
-          size: Math.floor(size * 100) / 100, // round down to 2 decimals
+          size,
           side: Side.BUY,
         },
         undefined,

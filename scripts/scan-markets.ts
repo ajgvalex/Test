@@ -246,7 +246,117 @@ async function enrichMarketPrices(markets: ClobMarket[]): Promise<MarketWithPric
 }
 
 // -----------------------------------------------------------------------------
+// Web news search - fetches real-time news for each market question
+// -----------------------------------------------------------------------------
+
+interface NewsSnippet {
+  title: string;
+  snippet: string;
+  source: string;
+  date?: string;
+}
+
+interface MarketNewsContext {
+  question: string;
+  news: NewsSnippet[];
+}
+
+/**
+ * Extracts core search keywords from a Polymarket question.
+ * Strips "Will", "?", date qualifiers, and generic filler to get a focused query.
+ */
+function extractSearchQuery(question: string): string {
+  return question
+    .replace(/^(Will|Is|Does|Do|Has|Have|Can|Could|Should|Are)\s+/i, "")
+    .replace(/\?/g, "")
+    .replace(/\b(before|by|in|on|during)\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(,?\s*\d{4})?\b/gi, "")
+    .replace(/\b(before|by)\s+\w+\s+\d{4}\b/gi, "")
+    .trim();
+}
+
+/**
+ * Searches the web for recent news about a market question.
+ * Uses DuckDuckGo HTML search (no API key needed).
+ */
+async function searchNewsForMarket(question: string): Promise<NewsSnippet[]> {
+  const query = extractSearchQuery(question);
+  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query + " latest news 2026")}`;
+
+  try {
+    const res = await fetch(searchUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; PolymarketBot/1.0)",
+        Accept: "text/html",
+      },
+    });
+    if (!res.ok) return [];
+
+    const html = await res.text();
+
+    // Parse DuckDuckGo HTML results (simple regex extraction)
+    const results: NewsSnippet[] = [];
+    const resultBlocks = html.split(/class="result__body"/);
+
+    for (let i = 1; i < resultBlocks.length && results.length < 5; i++) {
+      const block = resultBlocks[i];
+
+      // Extract title
+      const titleMatch = block.match(/class="result__a"[^>]*>([^<]+)</);
+      const title = titleMatch?.[1]?.replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim() ?? "";
+
+      // Extract snippet
+      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
+      let snippet = snippetMatch?.[1]?.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim() ?? "";
+      snippet = snippet.substring(0, 300);
+
+      // Extract source domain
+      const sourceMatch = block.match(/class="result__url"[^>]*>([^<]+)/);
+      const source = sourceMatch?.[1]?.trim() ?? "";
+
+      if (title && snippet) {
+        results.push({ title, snippet, source });
+      }
+    }
+
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetches news for a batch of markets concurrently with rate limiting.
+ */
+async function fetchNewsForMarkets(
+  markets: { question: string }[],
+): Promise<Map<string, NewsSnippet[]>> {
+  const newsMap = new Map<string, NewsSnippet[]>();
+
+  // Process in small concurrent batches to avoid rate limiting
+  const CONCURRENT = 3;
+  for (let i = 0; i < markets.length; i += CONCURRENT) {
+    const batch = markets.slice(i, i + CONCURRENT);
+    const results = await Promise.all(
+      batch.map(async (m) => {
+        const news = await searchNewsForMarket(m.question);
+        return { question: m.question, news };
+      }),
+    );
+    for (const r of results) {
+      newsMap.set(r.question, r.news);
+    }
+    // Small delay between batches
+    if (i + CONCURRENT < markets.length) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
+  return newsMap;
+}
+
+// -----------------------------------------------------------------------------
 // Claude batch analysis (analyze multiple markets in one call)
+// Now enriched with real-time news context
 // -----------------------------------------------------------------------------
 
 const anthropic = new Anthropic();
@@ -257,19 +367,26 @@ interface MarketAnalysis {
   confidence: "low" | "medium" | "high";
   reasoning: string;
   keyFactors: string[];
+  newsAlignment: "supports_yes" | "supports_no" | "mixed" | "no_news";
 }
 
 async function analyzeMarketBatch(
   markets: { question: string; description: string; yesPrice: number }[],
+  newsContext: Map<string, NewsSnippet[]>,
 ): Promise<MarketAnalysis[]> {
   const marketList = markets
-    .map(
-      (m, i) =>
-        `MARKET ${i + 1}:
+    .map((m, i) => {
+      const news = newsContext.get(m.question) ?? [];
+      const newsSection = news.length > 0
+        ? `  Recent News:\n${news.map((n, j) => `    ${j + 1}. [${n.source}] ${n.title}\n       ${n.snippet}`).join("\n")}`
+        : `  Recent News: No recent news found`;
+
+      return `MARKET ${i + 1}:
   Question: ${m.question}
-  Description: ${m.description.substring(0, 200)}
-  Current YES price: ${(m.yesPrice * 100).toFixed(1)}%`,
-    )
+  Description: ${m.description.substring(0, 300)}
+  Current YES price: ${(m.yesPrice * 100).toFixed(1)}%
+${newsSection}`;
+    })
     .join("\n\n");
 
   const response = await anthropic.messages.create({
@@ -278,17 +395,27 @@ async function analyzeMarketBatch(
     messages: [
       {
         role: "user",
-        content: `You are an expert prediction market analyst. Today is ${new Date().toISOString().slice(0, 10)}.
+        content: `You are an expert prediction market analyst and geopolitical researcher. Today is ${new Date().toISOString().slice(0, 10)}.
 
-Analyze each market below. For each one, estimate the TRUE probability of YES happening based on your knowledge of current events, historical patterns, and any relevant context.
+For each market below, you are given the question, current market price, and REAL-TIME NEWS snippets gathered just now from the internet. Use this news context heavily in your analysis.
+
+Your job: estimate the TRUE probability of YES happening based on:
+1. The REAL-TIME NEWS provided (most important - this is current information)
+2. Geopolitical and economic context implied by the news
+3. Social sentiment and trends visible in the headlines
+4. Historical patterns and base rates
+5. Your own knowledge of the topic
 
 IMPORTANT RULES:
-- Do NOT just echo the market price. Use your own independent judgment.
-- If you think the market is correct, say so, but still give your own estimate.
-- Be bold: prediction markets are often wrong, especially on less liquid markets.
-- Use "medium" or "high" confidence when you have genuine knowledge about the topic.
-- Only use "low" confidence when the topic is truly obscure or unknowable.
-- Your estimates should be based on real-world knowledge, not on what the market says.
+- PRIORITIZE the news context - it's real-time and more current than your training data.
+- Look for signals: government announcements, polls, expert opinions, economic indicators, diplomatic moves.
+- Consider sentiment: are headlines mostly positive or negative about the outcome?
+- Do NOT just echo the market price. The whole point is to find where markets are WRONG.
+- Be bold: if the news strongly suggests the market is mispriced, say so.
+- "newsAlignment" should reflect whether the news leans toward YES, NO, is mixed, or absent.
+- Use "high" confidence when multiple news sources point the same direction.
+- Use "medium" when news gives some signal but is not conclusive.
+- Use "low" only when you truly have no information.
 
 ${marketList}
 
@@ -298,8 +425,9 @@ Respond with ONLY a JSON array (no markdown, no backticks, no explanation outsid
     "question": "exact question text",
     "estimatedProbability": 0.XX,
     "confidence": "low|medium|high",
-    "reasoning": "1-2 sentences explaining your estimate",
-    "keyFactors": ["factor1", "factor2"]
+    "reasoning": "2-3 sentences explaining your estimate, referencing specific news if available",
+    "keyFactors": ["factor1", "factor2", "factor3"],
+    "newsAlignment": "supports_yes|supports_no|mixed|no_news"
   }
 ]
 
@@ -414,7 +542,17 @@ async function main() {
     return;
   }
 
-  // 3. Analyze markets in batches with Claude
+  // 3. Search real-time news for each market
+  log(`\nSearching real-time news for ${BOLD}${marketsWithPrices.length}${RESET} markets...`);
+  const newsContext = await fetchNewsForMarkets(
+    marketsWithPrices.map((m) => ({ question: m.market.question })),
+  );
+  const marketsWithNews = [...newsContext.entries()].filter(([, news]) => news.length > 0).length;
+  log(
+    `Found news for ${GREEN}${BOLD}${marketsWithNews}${RESET} of ${marketsWithPrices.length} markets`,
+  );
+
+  // 4. Analyze markets in batches with Claude (enriched with news)
   const BATCH_SIZE = 8;
   const allAnalyses: {
     analysis: MarketAnalysis;
@@ -428,7 +566,7 @@ async function main() {
     const totalBatches = Math.ceil(marketsWithPrices.length / BATCH_SIZE);
 
     log(
-      `Analyzing batch ${BOLD}${batchNum}/${totalBatches}${RESET} (${batch.length} markets) with Claude...`,
+      `Analyzing batch ${BOLD}${batchNum}/${totalBatches}${RESET} (${batch.length} markets) with Claude + news context...`,
     );
 
     const batchInput = batch.map((m) => ({
@@ -437,7 +575,7 @@ async function main() {
       yesPrice: m.yesPrice,
     }));
 
-    const analyses = await analyzeMarketBatch(batchInput);
+    const analyses = await analyzeMarketBatch(batchInput, newsContext);
 
     for (let j = 0; j < analyses.length && j < batch.length; j++) {
       allAnalyses.push({
@@ -448,7 +586,7 @@ async function main() {
     }
   }
 
-  // 4. Calculate edge and filter opportunities
+  // 5. Calculate edge and filter opportunities
   interface Opportunity {
     question: string;
     marketPrice: number;
@@ -459,6 +597,7 @@ async function main() {
     confidence: string;
     reasoning: string;
     keyFactors: string[];
+    newsAlignment: string;
     conditionId: string;
   }
 
@@ -478,6 +617,14 @@ async function main() {
         : analysis.confidence === "medium"
           ? YELLOW
           : DIM;
+    const newsIcon =
+      analysis.newsAlignment === "supports_yes"
+        ? `${GREEN}+news${RESET}`
+        : analysis.newsAlignment === "supports_no"
+          ? `${RED}-news${RESET}`
+          : analysis.newsAlignment === "mixed"
+            ? `${YELLOW}~news${RESET}`
+            : `${DIM}?news${RESET}`;
 
     const shortQ =
       market.question.length > 50
@@ -488,7 +635,7 @@ async function main() {
       `  ${isOpportunity ? BOLD : ""}${shortQ}${RESET}`,
     );
     console.log(
-      `    Market: ${(yesPrice * 100).toFixed(0)}% | AI: ${(analysis.estimatedProbability * 100).toFixed(0)}% | Edge: ${edgeColor}${(edge * 100).toFixed(1)}%${RESET} | Conf: ${confColor}${analysis.confidence}${RESET}`,
+      `    Market: ${(yesPrice * 100).toFixed(0)}% | AI: ${(analysis.estimatedProbability * 100).toFixed(0)}% | Edge: ${edgeColor}${(edge * 100).toFixed(1)}%${RESET} | Conf: ${confColor}${analysis.confidence}${RESET} | ${newsIcon}`,
     );
 
     if (isOpportunity) {
@@ -502,12 +649,13 @@ async function main() {
         confidence: analysis.confidence,
         reasoning: analysis.reasoning,
         keyFactors: analysis.keyFactors,
+        newsAlignment: analysis.newsAlignment ?? "no_news",
         conditionId: market.condition_id,
       });
     }
   }
 
-  // 5. Sort and display opportunities
+  // 6. Sort and display opportunities
   opportunities.sort((a, b) => b.edge - a.edge);
 
   logHeader("Suggested Opportunities");
@@ -530,13 +678,21 @@ async function main() {
     const opp = opportunities[i];
     const edgeColor = opp.edge >= 0.15 ? GREEN : YELLOW;
     const sideColor = opp.side === "YES" ? GREEN : RED;
+    const newsLabel =
+      opp.newsAlignment === "supports_yes"
+        ? `${GREEN}News supports YES${RESET}`
+        : opp.newsAlignment === "supports_no"
+          ? `${RED}News supports NO${RESET}`
+          : opp.newsAlignment === "mixed"
+            ? `${YELLOW}News is mixed${RESET}`
+            : `${DIM}No recent news${RESET}`;
 
     console.log(`  ${BOLD}${WHITE}${i + 1}. ${opp.question}${RESET}`);
     console.log(
       `     Market: ${(opp.marketPrice * 100).toFixed(1)}%  |  AI estimate: ${(opp.estimatedProb * 100).toFixed(1)}%  |  Edge: ${edgeColor}${BOLD}${(opp.edge * 100).toFixed(1)}%${RESET}`,
     );
     console.log(
-      `     Buy ${sideColor}${BOLD}${opp.side}${RESET}  |  Bet: ${GREEN}$${opp.suggestedBet.toFixed(2)}${RESET}  |  Confidence: ${opp.confidence}`,
+      `     Buy ${sideColor}${BOLD}${opp.side}${RESET}  |  Bet: ${GREEN}$${opp.suggestedBet.toFixed(2)}${RESET}  |  Confidence: ${opp.confidence}  |  ${newsLabel}`,
     );
     console.log(`     ${DIM}${opp.reasoning}${RESET}`);
     if (opp.keyFactors.length > 0) {
@@ -545,16 +701,18 @@ async function main() {
     console.log();
   }
 
-  // 6. Summary
+  // 7. Summary
   const totalSuggested = opportunities.reduce((s, o) => s + o.suggestedBet, 0);
+  const newsBackedCount = opportunities.filter((o) => o.newsAlignment !== "no_news").length;
   console.log(`${MAGENTA}${"─".repeat(70)}${RESET}`);
   console.log(`  Scanned: ${allAnalyses.length} markets`);
-  console.log(`  Opportunities: ${GREEN}${opportunities.length}${RESET}`);
+  console.log(`  Opportunities: ${GREEN}${opportunities.length}${RESET} (${newsBackedCount} with news backing)`);
   console.log(`  Total suggested: $${totalSuggested.toFixed(2)} of $${opts.balance}`);
   console.log();
+  console.log(`  ${DIM}Analysis based on: real-time news, geopolitical context, sentiment analysis${RESET}`);
   console.log(`  ${YELLOW}${BOLD}DISCLAIMER:${RESET} ${YELLOW}AI analysis, not financial advice. DYOR.${RESET}\n`);
 
-  // 7. Interactive trade execution
+  // 8. Interactive trade execution
   const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
   if (!privateKey) {
     log(`${DIM}Set POLYMARKET_PRIVATE_KEY in .env.local to enable trade execution.${RESET}`);
@@ -632,6 +790,7 @@ interface Opportunity {
   confidence: string;
   reasoning: string;
   keyFactors: string[];
+  newsAlignment: string;
   conditionId: string;
 }
 

@@ -463,17 +463,82 @@ interface CryptoTA {
   high24h: number;
   low24h: number;
   volume24h: number;
-  sma7: number;      // 7-period SMA (hourly)
-  sma25: number;     // 25-period SMA (hourly)
-  rsi14: number;     // 14-period RSI (hourly)
+  // Hourly indicators
+  sma7: number;
+  sma25: number;
+  ema12: number;
+  ema26: number;
+  rsi14: number;
   trend: "bullish" | "bearish" | "neutral";
   support: number;
   resistance: number;
+  macd: number;           // MACD line (EMA12 - EMA26)
+  macdSignal: number;     // 9-period EMA of MACD
+  macdHistogram: number;  // MACD - signal
+  bollingerUpper: number; // SMA20 + 2*stddev
+  bollingerLower: number; // SMA20 - 2*stddev
+  bollingerWidth: number; // (upper - lower) / mid — squeeze detection
+  atr14: number;          // Average True Range (volatility)
   // Short-term (5-minute candles)
-  rsi14_5m: number;  // 14-period RSI on 5m candles
-  sma7_5m: number;   // 7-period SMA on 5m candles
+  rsi14_5m: number;
+  sma7_5m: number;
+  ema9_5m: number;
   trend5m: "bullish" | "bearish" | "neutral";
-  change10m: number; // price change last 10 minutes
+  change10m: number;
+  macd_5m: number;
+  macdSignal_5m: number;
+  volumeSpike_5m: boolean;  // current 5m volume > 2x average
+  // 1-minute candles (ultra short-term)
+  rsi14_1m: number;
+  change5m: number;         // exact 5-min price change
+  trend1m: "bullish" | "bearish" | "neutral";
+  volumeSpike_1m: boolean;
+}
+
+function computeEMA(values: number[], period: number): number[] {
+  const emas: number[] = [];
+  const k = 2 / (period + 1);
+  emas[0] = values[0];
+  for (let i = 1; i < values.length; i++) {
+    emas[i] = values[i] * k + emas[i - 1] * (1 - k);
+  }
+  return emas;
+}
+
+function computeMACD(closes: number[]): { macd: number; signal: number; histogram: number } {
+  if (closes.length < 26) return { macd: 0, signal: 0, histogram: 0 };
+  const ema12 = computeEMA(closes, 12);
+  const ema26 = computeEMA(closes, 26);
+  const macdLine = ema12.map((v, i) => v - ema26[i]);
+  const signalLine = computeEMA(macdLine.slice(-9), 9);
+  const macd = macdLine[macdLine.length - 1];
+  const signal = signalLine[signalLine.length - 1];
+  return { macd, signal, histogram: macd - signal };
+}
+
+function computeBollinger(closes: number[], period = 20): { upper: number; lower: number; mid: number; width: number } {
+  if (closes.length < period) return { upper: 0, lower: 0, mid: 0, width: 0 };
+  const slice = closes.slice(-period);
+  const mid = slice.reduce((s, v) => s + v, 0) / period;
+  const variance = slice.reduce((s, v) => s + (v - mid) ** 2, 0) / period;
+  const stddev = Math.sqrt(variance);
+  const upper = mid + 2 * stddev;
+  const lower = mid - 2 * stddev;
+  return { upper, lower, mid, width: mid > 0 ? (upper - lower) / mid : 0 };
+}
+
+function computeATR(highs: number[], lows: number[], closes: number[], period = 14): number {
+  if (highs.length < period + 1) return 0;
+  const trs: number[] = [];
+  for (let i = 1; i < highs.length; i++) {
+    const tr = Math.max(
+      highs[i] - lows[i],
+      Math.abs(highs[i] - closes[i - 1]),
+      Math.abs(lows[i] - closes[i - 1]),
+    );
+    trs.push(tr);
+  }
+  return trs.slice(-period).reduce((s, v) => s + v, 0) / period;
 }
 
 function computeRSI(closes: number[], period = 14): number {
@@ -521,41 +586,79 @@ async function fetchCryptoTA(): Promise<CryptoTA[]> {
       const low24h = Math.min(...lows.slice(-24));
       const volume24h = volumes.slice(-24).reduce((s, v) => s + v, 0);
 
+      // --- Hourly indicators ---
       const sma7 = computeSMA(closes, 7);
       const sma25 = computeSMA(closes, 25);
+      const ema12arr = computeEMA(closes, 12);
+      const ema26arr = computeEMA(closes, 26);
+      const ema12 = ema12arr[ema12arr.length - 1];
+      const ema26 = ema26arr[ema26arr.length - 1];
       const rsi14 = computeRSI(closes, 14);
+      const macdH = computeMACD(closes);
+      const bollingerH = computeBollinger(closes, 20);
+      const atr14 = computeATR(highs, lows, closes, 14);
 
-      // Simple trend detection
       let trend: "bullish" | "bearish" | "neutral" = "neutral";
       if (currentPrice > sma7 && sma7 > sma25 && rsi14 > 50) trend = "bullish";
       else if (currentPrice < sma7 && sma7 < sma25 && rsi14 < 50) trend = "bearish";
 
-      // Support/resistance from recent highs/lows
       const support = Math.min(...lows.slice(-12));
       const resistance = Math.max(...highs.slice(-12));
 
-      // Short-term: 5-minute candles for immediate momentum
-      let rsi14_5m = 50, sma7_5m = currentPrice, trend5m: "bullish" | "bearish" | "neutral" = "neutral", change10m = 0;
+      // --- 5-minute candles ---
+      let rsi14_5m = 50, sma7_5m = currentPrice, ema9_5m = currentPrice;
+      let trend5m: "bullish" | "bearish" | "neutral" = "neutral";
+      let change10m = 0, macd_5m = 0, macdSignal_5m = 0, volumeSpike_5m = false;
       try {
-        const kline5mUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=5m&limit=30`;
-        const kline5mRes = await fetch(kline5mUrl);
-        if (kline5mRes.ok) {
-          const k5m = await kline5mRes.json() as number[][];
-          const closes5m = k5m.map((k: any) => parseFloat(k[4]));
-          rsi14_5m = computeRSI(closes5m, 14);
-          sma7_5m = computeSMA(closes5m, 7);
-          // 10 min = 2 candles of 5m
-          const price10mAgo = closes5m.length >= 2 ? closes5m[closes5m.length - 2] : closes5m[0];
+        const k5mRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=5m&limit=30`);
+        if (k5mRes.ok) {
+          const k5m = await k5mRes.json() as any[];
+          const closes5 = k5m.map((k: any) => parseFloat(k[4]));
+          const vols5 = k5m.map((k: any) => parseFloat(k[5]));
+          rsi14_5m = computeRSI(closes5, 14);
+          sma7_5m = computeSMA(closes5, 7);
+          const ema9arr5 = computeEMA(closes5, 9);
+          ema9_5m = ema9arr5[ema9arr5.length - 1];
+          const macd5 = computeMACD(closes5);
+          macd_5m = macd5.macd;
+          macdSignal_5m = macd5.signal;
+          const price10mAgo = closes5.length >= 3 ? closes5[closes5.length - 3] : closes5[0];
           change10m = ((currentPrice - price10mAgo) / price10mAgo) * 100;
-          if (currentPrice > sma7_5m && rsi14_5m > 55) trend5m = "bullish";
-          else if (currentPrice < sma7_5m && rsi14_5m < 45) trend5m = "bearish";
+          if (currentPrice > ema9_5m && rsi14_5m > 55) trend5m = "bullish";
+          else if (currentPrice < ema9_5m && rsi14_5m < 45) trend5m = "bearish";
+          // Volume spike: current candle > 2x average of last 20
+          const avgVol5 = vols5.slice(-20).reduce((s, v) => s + v, 0) / 20;
+          volumeSpike_5m = vols5[vols5.length - 1] > avgVol5 * 2;
         }
-      } catch { /* 5m data optional */ }
+      } catch { /* optional */ }
+
+      // --- 1-minute candles (ultra short-term) ---
+      let rsi14_1m = 50, change5m = 0, trend1m: "bullish" | "bearish" | "neutral" = "neutral", volumeSpike_1m = false;
+      try {
+        const k1mRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=1m&limit=20`);
+        if (k1mRes.ok) {
+          const k1m = await k1mRes.json() as any[];
+          const closes1 = k1m.map((k: any) => parseFloat(k[4]));
+          const vols1 = k1m.map((k: any) => parseFloat(k[5]));
+          rsi14_1m = computeRSI(closes1, 14);
+          const price5mAgo = closes1.length >= 5 ? closes1[closes1.length - 5] : closes1[0];
+          change5m = ((currentPrice - price5mAgo) / price5mAgo) * 100;
+          const sma5_1m = computeSMA(closes1, 5);
+          if (currentPrice > sma5_1m && rsi14_1m > 55) trend1m = "bullish";
+          else if (currentPrice < sma5_1m && rsi14_1m < 45) trend1m = "bearish";
+          const avgVol1 = vols1.slice(-15).reduce((s, v) => s + v, 0) / 15;
+          volumeSpike_1m = vols1[vols1.length - 1] > avgVol1 * 2;
+        }
+      } catch { /* optional */ }
 
       results.push({
         symbol, price: currentPrice, change24h, high24h, low24h, volume24h,
-        sma7, sma25, rsi14, trend, support, resistance,
-        rsi14_5m, sma7_5m, trend5m, change10m,
+        sma7, sma25, ema12, ema26, rsi14, trend, support, resistance,
+        macd: macdH.macd, macdSignal: macdH.signal, macdHistogram: macdH.histogram,
+        bollingerUpper: bollingerH.upper, bollingerLower: bollingerH.lower, bollingerWidth: bollingerH.width,
+        atr14,
+        rsi14_5m, sma7_5m, ema9_5m, trend5m, change10m, macd_5m, macdSignal_5m, volumeSpike_5m,
+        rsi14_1m, change5m, trend1m, volumeSpike_1m,
       });
     } catch {
       // API unavailable, skip
@@ -568,16 +671,42 @@ async function fetchCryptoTA(): Promise<CryptoTA[]> {
 function formatCryptoTA(taList: CryptoTA[]): string {
   if (taList.length === 0) return "";
 
-  let text = "\n=== REAL-TIME CRYPTO TECHNICAL ANALYSIS ===\n";
+  let text = "\n=== REAL-TIME CRYPTO TECHNICAL ANALYSIS (MULTI-TIMEFRAME) ===\n";
   for (const ta of taList) {
-    const trendH = ta.trend === "bullish" ? "UP" : ta.trend === "bearish" ? "DOWN" : "SIDEWAYS";
-    const trend5 = ta.trend5m === "bullish" ? "UP" : ta.trend5m === "bearish" ? "DOWN" : "SIDEWAYS";
-    text += `\n${ta.symbol}/USDT: $${ta.price.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-  HOURLY: 24h Change: ${ta.change24h > 0 ? "+" : ""}${ta.change24h.toFixed(2)}% | Range: $${ta.low24h.toLocaleString()} - $${ta.high24h.toLocaleString()}
-    SMA(7h): $${ta.sma7.toFixed(0)} | SMA(25h): $${ta.sma25.toFixed(0)} | RSI(14h): ${ta.rsi14.toFixed(1)} ${ta.rsi14 > 70 ? "OVERBOUGHT" : ta.rsi14 < 30 ? "OVERSOLD" : ""} | Trend: ${trendH}
+    const tH = ta.trend === "bullish" ? "BULLISH" : ta.trend === "bearish" ? "BEARISH" : "NEUTRAL";
+    const t5 = ta.trend5m === "bullish" ? "BULLISH" : ta.trend5m === "bearish" ? "BEARISH" : "NEUTRAL";
+    const t1 = ta.trend1m === "bullish" ? "BULLISH" : ta.trend1m === "bearish" ? "BEARISH" : "NEUTRAL";
+    const macdCross = ta.macdHistogram > 0 ? "BULLISH_CROSS" : "BEARISH_CROSS";
+    const macdCross5 = ta.macd_5m > ta.macdSignal_5m ? "BULLISH_CROSS" : "BEARISH_CROSS";
+    const bbPos = ta.price > ta.bollingerUpper ? "ABOVE_UPPER_BAND" : ta.price < ta.bollingerLower ? "BELOW_LOWER_BAND" : "INSIDE_BANDS";
+
+    text += `
+${ta.symbol}/USDT: $${ta.price.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+
+  HOURLY TIMEFRAME:
+    24h: ${ta.change24h > 0 ? "+" : ""}${ta.change24h.toFixed(2)}% | Range: $${ta.low24h.toLocaleString()} - $${ta.high24h.toLocaleString()}
+    SMA(7): $${ta.sma7.toFixed(0)} | SMA(25): $${ta.sma25.toFixed(0)} | EMA(12): $${ta.ema12.toFixed(0)} | EMA(26): $${ta.ema26.toFixed(0)}
+    RSI(14): ${ta.rsi14.toFixed(1)} ${ta.rsi14 > 70 ? "!! OVERBOUGHT" : ta.rsi14 < 30 ? "!! OVERSOLD" : ""}
+    MACD: ${ta.macd.toFixed(2)} | Signal: ${ta.macdSignal.toFixed(2)} | Histogram: ${ta.macdHistogram > 0 ? "+" : ""}${ta.macdHistogram.toFixed(2)} [${macdCross}]
+    Bollinger: Lower $${ta.bollingerLower.toFixed(0)} | Upper $${ta.bollingerUpper.toFixed(0)} | Width: ${(ta.bollingerWidth * 100).toFixed(2)}% | Position: ${bbPos}
+    ATR(14): $${ta.atr14.toFixed(2)} (volatility: ${((ta.atr14 / ta.price) * 100).toFixed(3)}%)
     Support: $${ta.support.toLocaleString()} | Resistance: $${ta.resistance.toLocaleString()}
-  SHORT-TERM (5m candles): Last 10min: ${ta.change10m > 0 ? "+" : ""}${ta.change10m.toFixed(3)}%
-    RSI(14x5m): ${ta.rsi14_5m.toFixed(1)} | SMA(7x5m): $${ta.sma7_5m.toFixed(0)} | Trend(5m): ${trend5}`;
+    Trend: ${tH}
+
+  5-MINUTE TIMEFRAME:
+    Last 10min: ${ta.change10m > 0 ? "+" : ""}${ta.change10m.toFixed(3)}%
+    RSI(14): ${ta.rsi14_5m.toFixed(1)} | SMA(7): $${ta.sma7_5m.toFixed(0)} | EMA(9): $${ta.ema9_5m.toFixed(0)}
+    MACD: ${ta.macd_5m.toFixed(2)} | Signal: ${ta.macdSignal_5m.toFixed(2)} [${macdCross5}]
+    Volume spike: ${ta.volumeSpike_5m ? "YES !! (>2x average)" : "No"}
+    Trend: ${t5}
+
+  1-MINUTE TIMEFRAME (last 5 minutes):
+    Change: ${ta.change5m > 0 ? "+" : ""}${ta.change5m.toFixed(4)}%
+    RSI(14): ${ta.rsi14_1m.toFixed(1)}
+    Volume spike: ${ta.volumeSpike_1m ? "YES !! (>2x average)" : "No"}
+    Trend: ${t1}
+
+  MULTI-TIMEFRAME ALIGNMENT: ${ta.trend === ta.trend5m && ta.trend5m === ta.trend1m ? `ALL ${tH} !! (strong signal)` : `Mixed: 1h=${tH}, 5m=${t5}, 1m=${t1}`}`;
   }
   return text;
 }
@@ -646,8 +775,16 @@ CRITICAL SAFETY RULES:
 
 ANALYSIS RULES:
 - PRIORITIZE the news context - it's real-time and more current than your training data.
-${cryptoSection ? `- For CRYPTO markets: heavily weigh the technical indicators. RSI > 70 = overbought (less likely to go higher short-term). RSI < 30 = oversold. Price above SMA(7) & SMA(25) = bullish momentum. Use support/resistance to judge price target feasibility.
-- For crypto price predictions: compare the target price with current price, support, resistance, and 24h range to estimate probability.` : ""}
+${cryptoSection ? `- For CRYPTO markets, use the FULL technical analysis provided across 3 timeframes (1h, 5m, 1m):
+  * TREND ALIGNMENT: If all 3 timeframes agree (e.g. all BULLISH), this is a STRONG signal. Mixed signals = lower confidence.
+  * RSI: >70 = overbought (reversal likely), <30 = oversold (bounce likely). RSI divergence across timeframes is significant.
+  * MACD: BULLISH_CROSS on 5m with confirming 1h = strong short-term momentum. Watch histogram direction.
+  * BOLLINGER BANDS: Price at upper band = resistance, lower band = support. Narrow width (squeeze) = imminent breakout.
+  * ATR: High ATR = volatile, price targets further away are possible. Low ATR = range-bound, small moves likely.
+  * VOLUME SPIKES: Volume spike on 1m/5m = institutional activity, confirms breakout direction. No volume = weak move.
+  * SUPPORT/RESISTANCE: For price target questions, compare target with these levels. Price must break resistance to go higher.
+  * For 5-min prediction windows: Focus on 1m and 5m trends, RSI, MACD. Hourly sets context but 1m/5m drives immediate action.
+  * EMA(9) on 5m is the key line for short-term direction. Price above = bullish, below = bearish.` : ""}
 - Look for signals: government announcements, polls, expert opinions, economic indicators, diplomatic moves.
 - Consider sentiment: are headlines mostly positive or negative about the outcome?
 - Do NOT just echo the market price. The whole point is to find where markets are WRONG.
@@ -838,8 +975,13 @@ async function main() {
     cryptoTA = await fetchCryptoTA();
     if (cryptoTA.length > 0) {
       for (const ta of cryptoTA) {
-        const trendColor = ta.trend === "bullish" ? GREEN : ta.trend === "bearish" ? RED : YELLOW;
-        log(`  ${BOLD}${ta.symbol}${RESET} $${ta.price.toLocaleString("en-US", {maximumFractionDigits: 2})} | 24h: ${ta.change24h > 0 ? GREEN + "+" : RED}${ta.change24h.toFixed(2)}%${RESET} | RSI: ${ta.rsi14.toFixed(0)} | Trend: ${trendColor}${ta.trend}${RESET}`);
+        const tC = ta.trend === "bullish" ? GREEN : ta.trend === "bearish" ? RED : YELLOW;
+        const t5C = ta.trend5m === "bullish" ? GREEN : ta.trend5m === "bearish" ? RED : YELLOW;
+        const t1C = ta.trend1m === "bullish" ? GREEN : ta.trend1m === "bearish" ? RED : YELLOW;
+        const aligned = ta.trend === ta.trend5m && ta.trend5m === ta.trend1m;
+        log(`  ${BOLD}${ta.symbol}${RESET} $${ta.price.toLocaleString("en-US", {maximumFractionDigits: 2})} | 24h: ${ta.change24h > 0 ? GREEN + "+" : RED}${ta.change24h.toFixed(2)}%${RESET}`);
+        log(`    1h: ${tC}${ta.trend}${RESET} RSI:${ta.rsi14.toFixed(0)} MACD:${ta.macdHistogram > 0 ? GREEN + "+" : RED}${ta.macdHistogram.toFixed(1)}${RESET} | 5m: ${t5C}${ta.trend5m}${RESET} RSI:${ta.rsi14_5m.toFixed(0)}${ta.volumeSpike_5m ? ` ${YELLOW}VOL!${RESET}` : ""} | 1m: ${t1C}${ta.trend1m}${RESET} RSI:${ta.rsi14_1m.toFixed(0)}${ta.volumeSpike_1m ? ` ${YELLOW}VOL!${RESET}` : ""}`);
+        if (aligned) log(`    ${GREEN}${BOLD}>> ALL TIMEFRAMES ALIGNED: ${ta.trend.toUpperCase()} <<${RESET}`);
       }
     } else {
       log(`  ${YELLOW}Could not fetch crypto data (Binance API unavailable)${RESET}`);

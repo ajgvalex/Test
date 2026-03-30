@@ -39,7 +39,7 @@ while true; do
     --max-trades 3 \
     --max-per-trade 5 \
     --min-duration 15 \
-    --max-duration 45 \
+    --max-duration 120 \
     2>&1 | tee -a "$LOG"
 
   echo ""                                           | tee -a "$LOG"

@@ -746,23 +746,36 @@ function ask(question: string): Promise<string> {
 async function initClobClient(): Promise<ClobClient> {
   const privateKey = process.env.POLYMARKET_PRIVATE_KEY!;
   const host = process.env.POLYMARKET_API_URL ?? "https://clob.polymarket.com";
+  const proxyAddress = process.env.POLYMARKET_WALLET_ADDRESS;
 
   // Create ethers wallet as signer (EOA that controls the Polymarket proxy wallet)
   const wallet = new ethers.Wallet(privateKey);
   const eoaAddress = await wallet.getAddress();
-  log(`  EOA address: ${eoaAddress}`);
+  log(`  EOA address:   ${eoaAddress}`);
+  log(`  Proxy address: ${proxyAddress ?? "NOT SET"}`);
 
-  // Polymarket uses proxy wallets - funds deposited via the web UI go to a proxy
-  // contract controlled by your EOA. We must use POLY_PROXY signature type.
-  // The funderAddress is NOT needed when using POLY_PROXY (it's derived on-chain).
+  if (!proxyAddress) {
+    console.error(
+      `${RED}Error: POLYMARKET_WALLET_ADDRESS not set in .env.local${RESET}\n` +
+        `This is your Polymarket proxy wallet address (shown on polymarket.com/portfolio).\n` +
+        `It's different from your MetaMask/EOA address.`,
+    );
+    process.exit(1);
+  }
+
+  // Polymarket uses proxy wallets - when you deposit via the web UI, funds go to a
+  // proxy contract controlled by your EOA. We need:
+  //   signatureType = POLY_PROXY (tells exchange: "EOA signs on behalf of proxy")
+  //   funderAddress = proxy wallet address (becomes the "maker" in orders)
 
   // Create client without creds first, then derive them
   const clientForDerive = new ClobClient(
     host,
     Chain.POLYGON,
     wallet,
-    undefined,              // creds (derive below)
-    SignatureType.POLY_PROXY, // Polymarket proxy wallet signature
+    undefined,                // creds (derive below)
+    SignatureType.POLY_PROXY, // proxy wallet signature
+    proxyAddress,             // funderAddress = proxy wallet
   );
 
   log("Deriving API credentials from your wallet...");
@@ -770,13 +783,14 @@ async function initClobClient(): Promise<ClobClient> {
   log(`  API Key: ${creds.key}`);
   log(`  API credentials derived successfully`);
 
-  // Create fully authenticated client with POLY_PROXY
+  // Create fully authenticated client with POLY_PROXY + funderAddress
   return new ClobClient(
     host,
     Chain.POLYGON,
     wallet,
     creds,
     SignatureType.POLY_PROXY,
+    proxyAddress,             // funderAddress = proxy wallet (maker in orders)
   );
 }
 

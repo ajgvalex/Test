@@ -129,12 +129,51 @@ async function fetchJson<T>(path: string, query?: Record<string, string>): Promi
   return (await res.json()) as T;
 }
 
-async function getActiveMarkets(limit: number): Promise<ClobMarket[]> {
-  const data = await fetchJson<ClobMarket[] | { data: ClobMarket[]; next_cursor?: string }>(
-    "/markets",
-    { limit: String(limit), active: "true" },
-  );
-  return Array.isArray(data) ? data : data.data ?? [];
+async function getActiveMarkets(targetCount: number): Promise<ClobMarket[]> {
+  // The API returns old/closed markets first, so we need to paginate
+  // and filter until we have enough open markets
+  const allOpen: ClobMarket[] = [];
+  let cursor: string | undefined;
+  let pages = 0;
+  const MAX_PAGES = 20;
+
+  while (allOpen.length < targetCount && pages < MAX_PAGES) {
+    pages++;
+    const query: Record<string, string> = { limit: "100" };
+    if (cursor) query.next_cursor = cursor;
+
+    const data = await fetchJson<
+      ClobMarket[] | { data: ClobMarket[]; next_cursor?: string }
+    >("/markets", query);
+
+    const markets = Array.isArray(data) ? data : data.data ?? [];
+    const nextCursor = Array.isArray(data) ? undefined : data.next_cursor;
+
+    if (markets.length === 0) break;
+
+    // Filter: only open, not closed, accepting orders
+    const now = new Date();
+    for (const m of markets) {
+      if (m.closed) continue;
+      if (!(m as any).accepting_orders) continue;
+
+      // Skip expired
+      const endDate = m.end_date_iso ?? (m as any).end_date;
+      if (endDate) {
+        const d = new Date(endDate);
+        if (d < now) continue;
+      }
+
+      allOpen.push(m);
+      if (allOpen.length >= targetCount) break;
+    }
+
+    if (!nextCursor) break;
+    cursor = nextCursor;
+    log(`${DIM}  Page ${pages}: ${markets.length} fetched, ${allOpen.length} open so far...${RESET}`);
+  }
+
+  return allOpen;
 }
 
 async function getMidpoint(tokenId: string): Promise<number> {
@@ -154,65 +193,30 @@ interface MarketWithPrice {
 
 async function enrichMarketPrices(markets: ClobMarket[]): Promise<MarketWithPrice[]> {
   const results: MarketWithPrice[] = [];
-  const now = new Date();
-
-  // Debug: show first market's raw structure
-  if (markets.length > 0) {
-    const sample = markets[0];
-    log(`${DIM}Debug - First market raw fields:${RESET}`);
-    log(`${DIM}  question: ${sample.question}${RESET}`);
-    log(`${DIM}  condition_id: ${sample.condition_id}${RESET}`);
-    log(`${DIM}  active: ${sample.active}, closed: ${sample.closed}${RESET}`);
-    log(`${DIM}  end_date_iso: ${sample.end_date_iso}${RESET}`);
-    log(`${DIM}  tokens: ${JSON.stringify(sample.tokens?.slice(0, 2))}${RESET}`);
-    // Show all available field names
-    log(`${DIM}  all fields: ${Object.keys(sample).join(", ")}${RESET}`);
-  }
-
-  let skipNoTokens = 0;
-  let skipClosed = 0;
-  let skipExpired = 0;
-  let skipPriceFail = 0;
-  let skipExtremePrice = 0;
 
   for (const market of markets) {
-    if (!market.tokens || market.tokens.length === 0) { skipNoTokens++; continue; }
-    if (market.closed) { skipClosed++; continue; }
-
-    // Skip markets whose end date has already passed
-    // Check multiple possible field names
-    const endDateStr = market.end_date_iso
-      ?? (market as any).end_date
-      ?? (market as any).endDate
-      ?? (market as any).game_start_time;
-    if (endDateStr) {
-      const endDate = new Date(endDateStr);
-      if (endDate < now) { skipExpired++; continue; }
-    }
+    if (!market.tokens || market.tokens.length === 0) continue;
 
     const yesToken = market.tokens.find((t) => t.outcome === "Yes") ?? market.tokens[0];
     const noToken = market.tokens.find((t) => t.outcome === "No") ?? market.tokens[1];
 
     let yesPrice = yesToken?.price ?? 0;
 
-    // If price not in market data, fetch it
+    // If price not in market data, fetch midpoint
     if (!yesPrice && yesToken?.token_id) {
       try {
         yesPrice = await getMidpoint(yesToken.token_id);
-        await new Promise((r) => setTimeout(r, 200));
+        await new Promise((r) => setTimeout(r, 150));
       } catch {
-        skipPriceFail++;
         continue;
       }
     }
 
-    if (!yesPrice || yesPrice <= 0.02 || yesPrice >= 0.98) { skipExtremePrice++; continue; }
+    if (!yesPrice || yesPrice <= 0.02 || yesPrice >= 0.98) continue;
 
     const noPrice = noToken?.price ?? 1 - yesPrice;
     results.push({ market, yesPrice, noPrice });
   }
-
-  log(`${DIM}Skip reasons: no tokens=${skipNoTokens}, closed=${skipClosed}, expired=${skipExpired}, price fail=${skipPriceFail}, extreme price=${skipExtremePrice}${RESET}`);
 
   return results;
 }
@@ -369,16 +373,16 @@ async function main() {
   log(`Balance: ${BOLD}$${opts.balance}${RESET}`);
   console.log();
 
-  // 1. Fetch markets
-  log("Fetching active markets from Polymarket...");
-  const rawMarkets = await getActiveMarkets(opts.limit);
-  log(`API returned ${BOLD}${rawMarkets.length}${RESET} markets`);
+  // 1. Fetch open markets (paginates to find non-closed, non-expired ones)
+  log("Fetching open markets from Polymarket (this may take a moment)...");
+  const openMarkets = await getActiveMarkets(opts.limit);
+  log(`Found ${BOLD}${openMarkets.length}${RESET} open, tradeable markets`);
 
   // 2. Get prices for each market
   log("Fetching current prices...");
-  const marketsWithPrices = await enrichMarketPrices(rawMarkets);
+  const marketsWithPrices = await enrichMarketPrices(openMarkets);
   log(
-    `${BOLD}${marketsWithPrices.length}${RESET} current markets with valid prices (${rawMarkets.length - marketsWithPrices.length} skipped: resolved/expired/extreme price)`,
+    `${BOLD}${marketsWithPrices.length}${RESET} markets with valid prices`,
   );
 
   if (marketsWithPrices.length === 0) {

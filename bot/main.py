@@ -82,12 +82,24 @@ def print_prediction(analysis, learning_feedback=None, weights=None):
 
     # Learning feedback from previous prediction
     if learning_feedback is not None:
-        if learning_feedback:
-            fb = "\033[92m  ANTERIOR: ACERTASTE ✓\033[0m"
-        else:
-            fb = "\033[91m  ANTERIOR: FALLASTE ✗\033[0m"
+        was = learning_feedback.get("was_correct")
+        pred_dir = learning_feedback.get("predicted_direction", "?")
+        act_dir = learning_feedback.get("actual_direction", "?")
+        p_prev = learning_feedback.get("prev_price", 0)
+        p_act = learning_feedback.get("actual_price", 0)
+        diff = learning_feedback.get("price_diff", 0)
+
         print(f"  ║                                                  ║")
-        print(f"  ║  {fb}                        ║")
+        if was is True:
+            print(f"  ║  \033[92m  RESULTADO ANTERIOR: ACERTASTE ✓\033[0m              ║")
+        elif was is False:
+            print(f"  ║  \033[91m  RESULTADO ANTERIOR: FALLASTE ✗\033[0m               ║")
+        else:
+            print(f"  ║  \033[93m  RESULTADO ANTERIOR: NO CONTADO (={pred_dir})\033[0m    ║")
+        print(f"  ║    Dijiste: {pred_dir:<6}  Resultado: {act_dir:<6}         ║")
+        print(f"  ║    ${p_prev:>10,.2f} -> ${p_act:>10,.2f} ({diff:+,.2f})  ║")
+        print(f"  ║                                                  ║")
+        print(f"  ╠══════════════════════════════════════════════════╣")
 
     print(f"  ║                                                  ║")
     print(f"  ║  Precio cierre:  ${analysis.current_price:>10,.2f}                ║")

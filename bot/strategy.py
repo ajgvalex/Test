@@ -159,7 +159,10 @@ class AdaptiveWeights:
         self._save()
 
     def learn_from_outcome(self, actual_price: float):
-        """When the user enters a new price, evaluate the last prediction."""
+        """When the user enters a new price, evaluate the last prediction.
+
+        Returns a dict with learning details, or None if no pending prediction.
+        """
         # Find the most recent unresolved prediction
         pending = None
         for record in reversed(self.history):
@@ -176,16 +179,39 @@ class AdaptiveWeights:
 
         # Did the price actually go up or down?
         actual_went_up = actual_price > prev_price
+        actual_direction = "SUBIO" if actual_went_up else "BAJO" if actual_price < prev_price else "IGUAL"
 
         if predicted_signal == "BUY_YES":
+            predicted_direction = "ALZA"
             was_correct = actual_went_up
         elif predicted_signal == "BUY_NO":
+            predicted_direction = "BAJA"
             was_correct = not actual_went_up
         else:
             # HOLD - don't count
             pending["was_correct"] = None
             self._save()
-            return None
+            return {
+                "was_correct": None,
+                "predicted_direction": "NO APOSTAR",
+                "actual_direction": actual_direction,
+                "prev_price": prev_price,
+                "actual_price": actual_price,
+                "price_diff": actual_price - prev_price,
+            }
+
+        # If price didn't move at all, don't count it
+        if actual_price == prev_price:
+            pending["was_correct"] = None
+            self._save()
+            return {
+                "was_correct": None,
+                "predicted_direction": predicted_direction,
+                "actual_direction": "IGUAL",
+                "prev_price": prev_price,
+                "actual_price": actual_price,
+                "price_diff": 0.0,
+            }
 
         pending["was_correct"] = was_correct
         self.total_predictions += 1
@@ -197,7 +223,14 @@ class AdaptiveWeights:
         self._adjust_weights(pending, was_correct)
         self._save()
 
-        return was_correct
+        return {
+            "was_correct": was_correct,
+            "predicted_direction": predicted_direction,
+            "actual_direction": actual_direction,
+            "prev_price": prev_price,
+            "actual_price": actual_price,
+            "price_diff": actual_price - prev_price,
+        }
 
     def _adjust_weights(self, record: dict, was_correct: bool):
         """Reward indicators that contributed to correct predictions,

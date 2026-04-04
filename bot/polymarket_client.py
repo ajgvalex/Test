@@ -1,16 +1,23 @@
-"""Polymarket CLOB API client for Bitcoin 5-minute prediction markets."""
+"""Polymarket CLOB API client for Bitcoin 5-minute prediction markets.
 
+Uses the REST API directly without py-clob-client dependency.
+"""
+
+import hashlib
+import hmac
 import logging
 import time
+from base64 import b64encode
 from dataclasses import dataclass
 
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs, OrderType
-from py_clob_client.order_builder.constants import BUY, SELL
+import requests
 
 from config import PolymarketConfig
 
 logger = logging.getLogger(__name__)
+
+CLOB_BASE_URL = "https://clob.polymarket.com"
+GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
 
 BITCOIN_5MIN_SLUG = "bitcoin-5-minute"
 BITCOIN_KEYWORDS = ["bitcoin", "btc"]
@@ -44,48 +51,79 @@ class PolymarketClient:
 
     def __init__(self, config: PolymarketConfig):
         self.config = config
-        self.client = ClobClient(
-            host=config.host,
-            key=config.api_key,
-            chain_id=config.chain_id,
-            signature_type=2,
-            funder=config.private_key,
-        )
-        self._api_creds = None
-        self._init_client()
+        self.session = requests.Session()
+        self.session.headers.update({
+            "Content-Type": "application/json",
+        })
 
-    def _init_client(self):
-        """Initialize API credentials and derive keys."""
-        try:
-            self.client.set_api_creds(
-                self.client.create_or_derive_api_creds()
-            )
-            logger.info("Polymarket client initialized successfully")
-        except Exception as e:
-            logger.error("Failed to initialize Polymarket client: %s", e)
-            raise
+    def _get_auth_headers(self, method: str, path: str, body: str = "") -> dict:
+        """Generate HMAC authentication headers for CLOB API."""
+        timestamp = str(int(time.time()))
+        message = timestamp + method.upper() + path + body
+        signature = b64encode(
+            hmac.new(
+                self.config.api_secret.encode(),
+                message.encode(),
+                hashlib.sha256,
+            ).digest()
+        ).decode()
+
+        return {
+            "POLY-API-KEY": self.config.api_key,
+            "POLY-SIGNATURE": signature,
+            "POLY-TIMESTAMP": timestamp,
+            "POLY-PASSPHRASE": self.config.api_passphrase,
+        }
 
     def find_active_btc_5min_markets(self) -> list[Market]:
-        """Find active Bitcoin 5-minute prediction markets."""
+        """Find active Bitcoin 5-minute prediction markets via Gamma API."""
         markets = []
-        next_cursor = ""
 
-        for _ in range(10):  # Max 10 pages
-            try:
-                resp = self.client.get_markets(next_cursor=next_cursor)
-            except Exception as e:
-                logger.error("Error fetching markets: %s", e)
-                break
+        try:
+            # Search for Bitcoin 5-minute markets
+            resp = self.session.get(
+                f"{GAMMA_BASE_URL}/markets",
+                params={
+                    "closed": "false",
+                    "limit": 100,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
-            for market_data in resp.get("data", []):
+            for market_data in data:
                 if self._is_btc_5min_market(market_data):
                     market = self._parse_market(market_data)
                     if market and market.active:
                         markets.append(market)
 
-            next_cursor = resp.get("next_cursor", "")
-            if not next_cursor or next_cursor == "LTE=":
-                break
+        except Exception as e:
+            logger.error("Error fetching markets: %s", e)
+
+        # Also try searching by tag
+        if not markets:
+            try:
+                resp = self.session.get(
+                    f"{GAMMA_BASE_URL}/markets",
+                    params={
+                        "closed": "false",
+                        "tag": "bitcoin",
+                        "limit": 50,
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+                for market_data in data:
+                    if self._is_btc_5min_market(market_data):
+                        market = self._parse_market(market_data)
+                        if market and market.active:
+                            markets.append(market)
+
+            except Exception as e:
+                logger.error("Error fetching markets by tag: %s", e)
 
         logger.info("Found %d active BTC 5-min markets", len(markets))
         return markets
@@ -95,29 +133,33 @@ class PolymarketClient:
         markets = self.find_active_btc_5min_markets()
         if not markets:
             return None
-        # Return the market with the latest end date
         return sorted(markets, key=lambda m: m.end_date, reverse=True)[0]
 
-    def get_market_orderbook(self, token_id: str) -> dict:
-        """Get the order book for a specific token."""
+    def get_orderbook(self, token_id: str) -> dict:
+        """Get the order book for a specific token from CLOB."""
         try:
-            return self.client.get_order_book(token_id)
+            resp = self.session.get(
+                f"{CLOB_BASE_URL}/book",
+                params={"token_id": token_id},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json()
         except Exception as e:
             logger.error("Error fetching orderbook for %s: %s", token_id, e)
             return {}
 
     def get_best_prices(self, market: Market) -> tuple[float, float]:
-        """Get best ask prices for YES and NO tokens.
-
-        Returns:
-            Tuple of (yes_price, no_price)
-        """
+        """Get best ask prices for YES and NO tokens."""
         try:
-            book_yes = self.client.get_order_book(market.token_id_yes)
-            book_no = self.client.get_order_book(market.token_id_no)
+            book_yes = self.get_orderbook(market.token_id_yes)
+            book_no = self.get_orderbook(market.token_id_no)
 
-            yes_price = float(book_yes.get("asks", [{}])[0].get("price", 0.5))
-            no_price = float(book_no.get("asks", [{}])[0].get("price", 0.5))
+            asks_yes = book_yes.get("asks", [])
+            asks_no = book_no.get("asks", [])
+
+            yes_price = float(asks_yes[0]["price"]) if asks_yes else 0.5
+            no_price = float(asks_no[0]["price"]) if asks_no else 0.5
 
             return yes_price, no_price
         except (IndexError, KeyError, TypeError):
@@ -129,7 +171,7 @@ class PolymarketClient:
         """Buy YES tokens (betting BTC goes UP)."""
         return self._place_order(
             token_id=market.token_id_yes,
-            side=BUY,
+            side="BUY",
             amount=amount_usdc,
             price=price,
             label="YES",
@@ -141,7 +183,7 @@ class PolymarketClient:
         """Buy NO tokens (betting BTC goes DOWN)."""
         return self._place_order(
             token_id=market.token_id_no,
-            side=BUY,
+            side="BUY",
             amount=amount_usdc,
             price=price,
             label="NO",
@@ -155,19 +197,33 @@ class PolymarketClient:
         price: float,
         label: str,
     ) -> TradeResult:
-        """Place a limit order on Polymarket."""
+        """Place a limit order on Polymarket CLOB API."""
         try:
-            order_args = OrderArgs(
-                price=price,
-                size=amount / price,  # Convert USDC amount to token quantity
-                side=side,
-                token_id=token_id,
+            size = amount / price
+
+            order_payload = {
+                "tokenID": token_id,
+                "price": str(price),
+                "size": str(size),
+                "side": side,
+                "type": "GTC",
+            }
+
+            import json
+            body = json.dumps(order_payload)
+            path = "/order"
+            headers = self._get_auth_headers("POST", path, body)
+
+            resp = self.session.post(
+                f"{CLOB_BASE_URL}{path}",
+                json=order_payload,
+                headers=headers,
+                timeout=15,
             )
+            resp.raise_for_status()
+            data = resp.json()
 
-            signed_order = self.client.create_order(order_args)
-            resp = self.client.post_order(signed_order, OrderType.GTC)
-
-            order_id = resp.get("orderID", "")
+            order_id = data.get("orderID", "")
             success = bool(order_id)
 
             result = TradeResult(
@@ -176,7 +232,7 @@ class PolymarketClient:
                 side=label,
                 price=price,
                 amount=amount,
-                message=f"Order placed: {label} @ {price}" if success else f"Order failed: {resp}",
+                message=f"Order placed: {label} @ {price}" if success else f"Order failed: {data}",
             )
 
             if success:
@@ -185,7 +241,7 @@ class PolymarketClient:
                     side, label, price, amount,
                 )
             else:
-                logger.warning("Trade failed: %s", resp)
+                logger.warning("Trade failed: %s", data)
 
             return result
 
@@ -200,21 +256,13 @@ class PolymarketClient:
                 message=str(e),
             )
 
-    def get_balance(self) -> float:
-        """Get USDC balance on Polymarket."""
-        try:
-            balance = self.client.get_balance()
-            return float(balance) if balance else 0.0
-        except Exception as e:
-            logger.error("Error getting balance: %s", e)
-            return 0.0
-
     def _is_btc_5min_market(self, market_data: dict) -> bool:
         """Check if a market is a Bitcoin 5-minute prediction market."""
         question = market_data.get("question", "").lower()
         description = market_data.get("description", "").lower()
         slug = market_data.get("slug", "").lower()
-        tags = [t.lower() for t in market_data.get("tags", [])]
+        tags_raw = market_data.get("tags", [])
+        tags = [t.lower() for t in tags_raw] if isinstance(tags_raw, list) else []
 
         has_btc = any(kw in question or kw in description for kw in BITCOIN_KEYWORDS)
         has_5min = any(kw in question or kw in description for kw in FIVE_MIN_KEYWORDS)
@@ -233,17 +281,16 @@ class PolymarketClient:
             if len(tokens) < 2:
                 return None
 
-            # Tokens: index 0 = YES, index 1 = NO
             token_yes = tokens[0]
             token_no = tokens[1]
 
             return Market(
-                condition_id=market_data.get("condition_id", ""),
+                condition_id=market_data.get("condition_id", market_data.get("conditionId", "")),
                 question=market_data.get("question", ""),
-                token_id_yes=token_yes.get("token_id", ""),
-                token_id_no=token_no.get("token_id", ""),
-                end_date=market_data.get("end_date_iso", ""),
-                active=market_data.get("active", False),
+                token_id_yes=token_yes.get("token_id", token_yes.get("tokenId", "")),
+                token_id_no=token_no.get("token_id", token_no.get("tokenId", "")),
+                end_date=market_data.get("end_date_iso", market_data.get("endDate", "")),
+                active=market_data.get("active", not market_data.get("closed", False)),
                 best_ask_yes=float(token_yes.get("price", 0.5)),
                 best_ask_no=float(token_no.get("price", 0.5)),
             )

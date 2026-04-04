@@ -38,3 +38,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python bot
+bot/venv/
+bot/__pycache__/
+bot/*.pyc
+bot/bot.log
+bot/.env

@@ -41,24 +41,18 @@ def setup_logging(verbose: bool = False):
     )
 
 
-def print_prediction(analysis):
+def print_prediction(analysis, learning_feedback=None, weights=None):
     """Print a clear prediction from an AnalysisResult."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # Determine prediction text
     if analysis.signal == Signal.BUY_YES:
-        direction = "ALZA"
-        arrow = "/\\"
         apuesta = ">>> APUESTA A LA ALZA <<<"
         color_start = "\033[92m"  # Green
     elif analysis.signal == Signal.BUY_NO:
-        direction = "BAJA"
-        arrow = "\\/"
         apuesta = ">>> APUESTA A LA BAJA <<<"
         color_start = "\033[91m"  # Red
     else:
-        direction = "INCIERTO"
-        arrow = "--"
         apuesta = ">>> NO APOSTAR (senal debil) <<<"
         color_start = "\033[93m"  # Yellow
 
@@ -70,10 +64,31 @@ def print_prediction(analysis):
     bar_empty = 20 - bar_filled
     confidence_bar = "█" * bar_filled + "░" * bar_empty
 
+    # Price change arrow
+    if analysis.predicted_change_pct > 0:
+        pred_arrow = "\033[92m/\\\033[0m"
+        pred_dir = "SUBE"
+    elif analysis.predicted_change_pct < 0:
+        pred_arrow = "\033[91m\\/\033[0m"
+        pred_dir = "BAJA"
+    else:
+        pred_arrow = "--"
+        pred_dir = "LATERAL"
+
     print()
-    print(f"  ╔══════════════════════════════════════════════════╗")
-    print(f"  ║        PRONOSTICO BITCOIN - 5 MINUTOS           ║")
-    print(f"  ╠══════════════════════════════════════════════════╣")
+    print("  ╔══════════════════════════════════════════════════╗")
+    print("  ║        PRONOSTICO BITCOIN - 5 MINUTOS           ║")
+    print("  ╠══════════════════════════════════════════════════╣")
+
+    # Learning feedback from previous prediction
+    if learning_feedback is not None:
+        if learning_feedback:
+            fb = "\033[92m  ANTERIOR: ACERTASTE ✓\033[0m"
+        else:
+            fb = "\033[91m  ANTERIOR: FALLASTE ✗\033[0m"
+        print(f"  ║                                                  ║")
+        print(f"  ║  {fb}                        ║")
+
     print(f"  ║                                                  ║")
     print(f"  ║  Precio cierre:  ${analysis.current_price:>10,.2f}                ║")
     print(f"  ║  Hora:           {now}       ║")
@@ -83,14 +98,29 @@ def print_prediction(analysis):
     print(f"  ║  Confianza:      {confidence_pct:5.1f}%                          ║")
     print(f"  ║  [{confidence_bar}]                ║")
     print(f"  ║                                                  ║")
+    print("  ╠══════════════════════════════════════════════════╣")
+    print("  ║  PRECIO ESTIMADO SIGUIENTE CICLO                ║")
+    print(f"  ║                                                  ║")
+    print(f"  ║  {pred_arrow}  ${analysis.predicted_price:>10,.2f}  ({analysis.predicted_change_pct:+.3f}%) {pred_dir:>8}  ║")
+    print(f"  ║                                                  ║")
+    print("  ╠══════════════════════════════════════════════════╣")
     print(f"  ║  Indicadores:                                    ║")
     print(f"  ║    RSI:        {analysis.rsi:6.1f}  {'(sobrecompra)' if analysis.rsi > 70 else '(sobreventa)' if analysis.rsi < 30 else '(neutral)':>20}  ║")
     print(f"  ║    Momentum:  {analysis.momentum:+8.4f}  {'(alcista)' if analysis.momentum > 0 else '(bajista)':>20}  ║")
     print(f"  ║    SMA 5:     ${analysis.sma_short:>10,.2f}                ║")
     print(f"  ║    SMA 20:    ${analysis.sma_long:>10,.2f}                ║")
-    print(f"  ║    Tendencia:  {'SMA5 > SMA20 (alcista)' if analysis.sma_short > analysis.sma_long else 'SMA20 > SMA5 (bajista)':>29}  ║")
+
+    # Show adaptive weights and accuracy
+    if weights is not None:
+        print(f"  ║                                                  ║")
+        print("  ╠══════════════════════════════════════════════════╣")
+        print("  ║  MODELO ADAPTATIVO                               ║")
+        print(f"  ║    Pesos: RSI={weights.w_rsi:.0%}  MOM={weights.w_momentum:.0%}  SMA={weights.w_sma:.0%}       ║")
+        acc = weights.accuracy * 100
+        print(f"  ║    Precision: {acc:5.1f}% ({weights.correct_predictions}/{weights.total_predictions} aciertos)         ║")
+
     print(f"  ║                                                  ║")
-    print(f"  ╚══════════════════════════════════════════════════╝")
+    print("  ╚══════════════════════════════════════════════════╝")
     print()
 
 
@@ -105,7 +135,7 @@ def run_predict():
         return
 
     analysis = strategy.analyze()
-    print_prediction(analysis)
+    print_prediction(analysis, weights=strategy.weights)
 
 
 def run_apostar():
@@ -118,11 +148,20 @@ def run_apostar():
         print("  ERROR: No se pudieron obtener precios de BTC")
         return
 
-    print("  Datos cargados OK.\n")
+    print("  Datos cargados OK.")
+
+    if strategy.weights.total_predictions > 0:
+        acc = strategy.weights.accuracy * 100
+        print(f"  Modelo cargado: {strategy.weights.total_predictions} predicciones previas, {acc:.1f}% precision")
+
+    print()
     print("  ╔══════════════════════════════════════════════════╗")
     print("  ║   MODO APUESTA - Ingresa el precio de cierre    ║")
     print("  ║   del ultimo ciclo de 5 min y te digo si        ║")
     print("  ║   apostar a la ALZA o a la BAJA.                ║")
+    print("  ║                                                  ║")
+    print("  ║   El bot aprende de cada resultado y ajusta      ║")
+    print("  ║   sus pesos automaticamente.                     ║")
     print("  ║                                                  ║")
     print("  ║   Escribe 'salir' para terminar.                ║")
     print("  ╚══════════════════════════════════════════════════╝")
@@ -154,6 +193,11 @@ def run_apostar():
 
         round_num += 1
 
+        # Learn from previous prediction using this new actual price
+        learning_feedback = None
+        if round_num > 1:
+            learning_feedback = strategy.learn(close_price)
+
         # Add the user's close price to the historical data
         strategy.add_manual_price(close_price)
 
@@ -161,7 +205,7 @@ def run_apostar():
         analysis = strategy.analyze()
 
         print(f"\n  --- Ronda #{round_num} ---")
-        print_prediction(analysis)
+        print_prediction(analysis, learning_feedback=learning_feedback, weights=strategy.weights)
 
 
 def run_watch(interval: int = 60):

@@ -45,3 +45,4 @@ bot/__pycache__/
 bot/*.pyc
 bot/bot.log
 bot/.env
+bot/learning_data.json

@@ -156,11 +156,11 @@ def run_apostar():
     strategy = BTCStrategy(strategy_config)
 
     print("\n  Obteniendo datos historicos de BTC (ultimos 60 min)...")
-    if not strategy.fetch_recent_prices():
-        print("  ERROR: No se pudieron obtener precios de BTC")
-        return
-
-    print("  Datos cargados OK.")
+    if strategy.fetch_recent_prices():
+        print(f"  Datos cargados OK. BTC actual: ${strategy.tracker.prices[-1]:,.2f}")
+    else:
+        print("  No se pudieron obtener datos historicos (sin conexion).")
+        print("  Modo offline: ingresa al menos 15 precios para activar el analisis.")
 
     if strategy.weights.total_predictions > 0:
         acc = strategy.weights.accuracy * 100

@@ -32,7 +32,7 @@ class StrategyConfig:
     rsi_overbought: float = 70.0
     rsi_oversold: float = 30.0
     momentum_window: int = 5
-    confidence_threshold: float = 0.6
+    confidence_threshold: float = 0.15
 
 
 def load_polymarket_config() -> PolymarketConfig:
@@ -72,5 +72,5 @@ def load_strategy_config() -> StrategyConfig:
         rsi_overbought=float(os.getenv("RSI_OVERBOUGHT", "70")),
         rsi_oversold=float(os.getenv("RSI_OVERSOLD", "30")),
         momentum_window=int(os.getenv("MOMENTUM_WINDOW", "5")),
-        confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.6")),
+        confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.15")),
     )

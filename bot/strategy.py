@@ -286,7 +286,17 @@ class BTCStrategy:
         self.weights = AdaptiveWeights()
 
     def fetch_recent_prices(self) -> bool:
-        """Fetch recent BTC prices from Binance (1-min candles)."""
+        """Fetch recent BTC prices. Tries Binance first, then CoinGecko."""
+        if self._fetch_from_binance():
+            return True
+        logger.warning("Binance failed, trying CoinGecko...")
+        if self._fetch_from_coingecko():
+            return True
+        logger.warning("All price sources failed")
+        return False
+
+    def _fetch_from_binance(self) -> bool:
+        """Fetch 1-min candles from Binance."""
         try:
             resp = requests.get(
                 BINANCE_KLINES_URL,
@@ -307,14 +317,47 @@ class BTCStrategy:
                 self.tracker.add_price(close_price, close_time)
 
             logger.info(
-                "Fetched %d price points. Current BTC: $%.2f",
+                "Binance: %d precios. BTC: $%.2f",
                 len(self.tracker.prices),
                 self.tracker.prices[-1] if self.tracker.prices else 0,
             )
             return True
-
         except Exception as e:
-            logger.error("Error fetching BTC prices: %s", e)
+            logger.error("Binance error: %s", e)
+            return False
+
+    def _fetch_from_coingecko(self) -> bool:
+        """Fetch recent prices from CoinGecko (free, no API key)."""
+        try:
+            resp = requests.get(
+                COINGECKO_BTC_URL,
+                params={
+                    "vs_currency": "usd",
+                    "days": "1",
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            price_points = data.get("prices", [])
+
+            if not price_points:
+                return False
+
+            # Take the last 60 data points
+            recent = price_points[-60:]
+            self.tracker = PriceTracker()
+            for ts_ms, price in recent:
+                self.tracker.add_price(price, ts_ms / 1000)
+
+            logger.info(
+                "CoinGecko: %d precios. BTC: $%.2f",
+                len(self.tracker.prices),
+                self.tracker.prices[-1] if self.tracker.prices else 0,
+            )
+            return True
+        except Exception as e:
+            logger.error("CoinGecko error: %s", e)
             return False
 
     def add_manual_price(self, price: float):

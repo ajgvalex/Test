@@ -1,5 +1,7 @@
 """Main bot orchestrator for Polymarket Bitcoin 5-minute trading."""
 
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass, field

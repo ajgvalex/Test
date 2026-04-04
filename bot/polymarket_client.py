@@ -3,6 +3,8 @@
 Uses the REST API directly without py-clob-client dependency.
 """
 
+from __future__ import annotations
+
 import hashlib
 import hmac
 import logging

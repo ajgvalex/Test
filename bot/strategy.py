@@ -8,6 +8,8 @@ Uses a combination of:
 The strategy produces a signal: BUY_YES (bullish), BUY_NO (bearish), or HOLD.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass, field

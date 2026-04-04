@@ -161,6 +161,7 @@ class AdaptiveWeights:
     def learn_from_outcome(self, actual_price: float):
         """When the user enters a new price, evaluate the last prediction.
 
+        Evaluates DIRECTION only: did it go up or down as predicted?
         Returns a dict with learning details, or None if no pending prediction.
         """
         # Find the most recent unresolved prediction
@@ -184,34 +185,13 @@ class AdaptiveWeights:
         if predicted_signal == "BUY_YES":
             predicted_direction = "ALZA"
             was_correct = actual_went_up
-        elif predicted_signal == "BUY_NO":
+        else:  # BUY_NO
             predicted_direction = "BAJA"
             was_correct = not actual_went_up
-        else:
-            # HOLD - don't count
-            pending["was_correct"] = None
-            self._save()
-            return {
-                "was_correct": None,
-                "predicted_direction": "NO APOSTAR",
-                "actual_direction": actual_direction,
-                "prev_price": prev_price,
-                "actual_price": actual_price,
-                "price_diff": actual_price - prev_price,
-            }
 
-        # If price didn't move at all, don't count it
+        # Price didn't move - count as incorrect (user still entered the trade)
         if actual_price == prev_price:
-            pending["was_correct"] = None
-            self._save()
-            return {
-                "was_correct": None,
-                "predicted_direction": predicted_direction,
-                "actual_direction": "IGUAL",
-                "prev_price": prev_price,
-                "actual_price": actual_price,
-                "price_diff": 0.0,
-            }
+            was_correct = False
 
         pending["was_correct"] = was_correct
         self.total_predictions += 1
@@ -444,12 +424,11 @@ class BTCStrategy:
 
         confidence = min(abs(score), 1.0)
 
-        if score > 0 and confidence >= self.config.confidence_threshold:
+        # Always give a direction - no HOLD, user enters every trade
+        if score >= 0:
             signal = Signal.BUY_YES
-        elif score < 0 and confidence >= self.config.confidence_threshold:
-            signal = Signal.BUY_NO
         else:
-            signal = Signal.HOLD
+            signal = Signal.BUY_NO
 
         reason = " | ".join(reasons)
 

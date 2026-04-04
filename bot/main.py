@@ -49,12 +49,9 @@ def print_prediction(analysis, learning_feedback=None, weights=None):
     if analysis.signal == Signal.BUY_YES:
         apuesta = ">>> APUESTA A LA ALZA <<<"
         color_start = "\033[92m"  # Green
-    elif analysis.signal == Signal.BUY_NO:
+    else:
         apuesta = ">>> APUESTA A LA BAJA <<<"
         color_start = "\033[91m"  # Red
-    else:
-        apuesta = ">>> NO APOSTAR (senal debil) <<<"
-        color_start = "\033[93m"  # Yellow
 
     color_end = "\033[0m"
     confidence_pct = analysis.confidence * 100
@@ -90,12 +87,10 @@ def print_prediction(analysis, learning_feedback=None, weights=None):
         diff = learning_feedback.get("price_diff", 0)
 
         print(f"  ║                                                  ║")
-        if was is True:
+        if was:
             print(f"  ║  \033[92m  RESULTADO ANTERIOR: ACERTASTE ✓\033[0m              ║")
-        elif was is False:
-            print(f"  ║  \033[91m  RESULTADO ANTERIOR: FALLASTE ✗\033[0m               ║")
         else:
-            print(f"  ║  \033[93m  RESULTADO ANTERIOR: NO CONTADO (={pred_dir})\033[0m    ║")
+            print(f"  ║  \033[91m  RESULTADO ANTERIOR: FALLASTE ✗\033[0m               ║")
         print(f"  ║    Dijiste: {pred_dir:<6}  Resultado: {act_dir:<6}         ║")
         print(f"  ║    ${p_prev:>10,.2f} -> ${p_act:>10,.2f} ({diff:+,.2f})  ║")
         print(f"  ║                                                  ║")

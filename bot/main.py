@@ -2,26 +2,30 @@
 """Entry point for the Polymarket Bitcoin 5-minute trading bot.
 
 Usage:
-    # Dry run (default - no real trades):
+    # Pronostico unico:
+    python main.py --predict
+
+    # Monitoreo continuo (cada 60s):
+    python main.py --watch
+
+    # Dry run (simula trades):
     python main.py
 
     # Live trading:
     python main.py --live
-
-    # Custom trade amount:
-    python main.py --amount 10
-
-    # Single analysis (no trading loop):
-    python main.py --analyze-only
 """
+
+from __future__ import annotations
 
 import argparse
 import logging
 import sys
+import time
+from datetime import datetime, timezone
 
 from config import load_polymarket_config, load_strategy_config, load_trading_config
 from bot import TradingBot
-from strategy import BTCStrategy
+from strategy import BTCStrategy, Signal
 
 
 def setup_logging(verbose: bool = False):
@@ -37,34 +41,101 @@ def setup_logging(verbose: bool = False):
     )
 
 
-def run_analysis_only():
-    """Run a single analysis and print results."""
+def print_prediction(strategy):
+    """Run analysis and print a clear prediction."""
+    if not strategy.fetch_recent_prices():
+        print("  ERROR: No se pudieron obtener precios de BTC")
+        return False
+
+    analysis = strategy.analyze()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    # Determine prediction text
+    if analysis.signal == Signal.BUY_YES:
+        direction = "SUBE"
+        arrow = "/\\"
+        color_start = "\033[92m"  # Green
+    elif analysis.signal == Signal.BUY_NO:
+        direction = "BAJA"
+        arrow = "\\/"
+        color_start = "\033[91m"  # Red
+    else:
+        direction = "INDEFINIDO"
+        arrow = "--"
+        color_start = "\033[93m"  # Yellow
+
+    color_end = "\033[0m"
+    confidence_pct = analysis.confidence * 100
+
+    # Build confidence bar [████████░░]
+    bar_filled = int(confidence_pct / 5)
+    bar_empty = 20 - bar_filled
+    confidence_bar = "█" * bar_filled + "░" * bar_empty
+
+    print()
+    print(f"  ╔══════════════════════════════════════════════════╗")
+    print(f"  ║        PRONOSTICO BITCOIN - 5 MINUTOS           ║")
+    print(f"  ╠══════════════════════════════════════════════════╣")
+    print(f"  ║                                                  ║")
+    print(f"  ║  Precio actual:  ${analysis.current_price:>10,.2f}                ║")
+    print(f"  ║  Hora:           {now}       ║")
+    print(f"  ║                                                  ║")
+    print(f"  ║  ┌────────────────────────────────────────────┐  ║")
+    print(f"  ║  │  {color_start}{arrow} BTC va a: {direction:>10}  ({confidence_pct:5.1f}%){color_end}       │  ║")
+    print(f"  ║  │  Confianza: [{confidence_bar}]  │  ║")
+    print(f"  ║  └────────────────────────────────────────────┘  ║")
+    print(f"  ║                                                  ║")
+    print(f"  ║  Indicadores:                                    ║")
+    print(f"  ║    RSI:        {analysis.rsi:6.1f}  {'(sobrecompra)' if analysis.rsi > 70 else '(sobreventa)' if analysis.rsi < 30 else '(neutral)':>20}  ║")
+    print(f"  ║    Momentum:  {analysis.momentum:+8.4f}  {'(alcista)' if analysis.momentum > 0 else '(bajista)':>20}  ║")
+    print(f"  ║    SMA 5:     ${analysis.sma_short:>10,.2f}                ║")
+    print(f"  ║    SMA 20:    ${analysis.sma_long:>10,.2f}                ║")
+    print(f"  ║    Tendencia:  {'SMA5 > SMA20 (alcista)' if analysis.sma_short > analysis.sma_long else 'SMA20 > SMA5 (bajista)':>29}  ║")
+    print(f"  ║                                                  ║")
+    print(f"  ╚══════════════════════════════════════════════════╝")
+    print()
+
+    return True
+
+
+def run_predict():
+    """Run a single prediction."""
+    strategy_config = load_strategy_config()
+    strategy = BTCStrategy(strategy_config)
+    print_prediction(strategy)
+
+
+def run_watch(interval: int = 60):
+    """Run predictions continuously."""
     strategy_config = load_strategy_config()
     strategy = BTCStrategy(strategy_config)
 
-    print("\n Fetching BTC price data...")
-    if not strategy.fetch_recent_prices():
-        print(" Failed to fetch prices")
-        return
+    print(f"\n  Monitoreando BTC cada {interval}s... (Ctrl+C para salir)\n")
 
-    analysis = strategy.analyze()
-    print(f"\n{'='*50}")
-    print(f"  BTC ANALYSIS")
-    print(f"{'='*50}")
-    print(f"  Price:      ${analysis.current_price:,.2f}")
-    print(f"  RSI:        {analysis.rsi:.1f}")
-    print(f"  Momentum:   {analysis.momentum:.6f}")
-    print(f"  SMA Short:  ${analysis.sma_short:,.2f}")
-    print(f"  SMA Long:   ${analysis.sma_long:,.2f}")
-    print(f"  Signal:     {analysis.signal.value}")
-    print(f"  Confidence: {analysis.confidence:.2%}")
-    print(f"  Reason:     {analysis.reason}")
-    print(f"{'='*50}\n")
+    count = 0
+    try:
+        while True:
+            count += 1
+            print(f"  --- Prediccion #{count} ---")
+            print_prediction(strategy)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print(f"\n  Monitoreo detenido. Total predicciones: {count}\n")
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Polymarket Bitcoin 5-minute prediction trading bot"
+    )
+    parser.add_argument(
+        "--predict",
+        action="store_true",
+        help="Pronostico unico: sube o baja BTC en 5 min",
+    )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Monitoreo continuo con pronosticos repetidos",
     )
     parser.add_argument(
         "--live",
@@ -79,12 +150,13 @@ def main():
     parser.add_argument(
         "--interval",
         type=int,
-        help="Poll interval in seconds (overrides .env)",
+        default=60,
+        help="Intervalo entre predicciones en segundos (default: 60)",
     )
     parser.add_argument(
         "--analyze-only",
         action="store_true",
-        help="Run a single analysis without trading",
+        help="Alias de --predict",
     )
     parser.add_argument(
         "--verbose", "-v",
@@ -95,8 +167,12 @@ def main():
 
     setup_logging(args.verbose)
 
-    if args.analyze_only:
-        run_analysis_only()
+    if args.predict or args.analyze_only:
+        run_predict()
+        return
+
+    if args.watch:
+        run_watch(args.interval)
         return
 
     # Load configs

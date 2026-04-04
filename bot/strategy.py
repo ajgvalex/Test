@@ -103,6 +103,10 @@ class BTCStrategy:
             logger.error("Error fetching BTC prices: %s", e)
             return False
 
+    def add_manual_price(self, price: float):
+        """Add a manually entered price to the tracker."""
+        self.tracker.add_price(price)
+
     def analyze(self) -> AnalysisResult:
         """Run full analysis and produce a trading signal."""
         if not self.tracker.has_enough_data:

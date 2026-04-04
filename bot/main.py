@@ -41,33 +41,31 @@ def setup_logging(verbose: bool = False):
     )
 
 
-def print_prediction(strategy):
-    """Run analysis and print a clear prediction."""
-    if not strategy.fetch_recent_prices():
-        print("  ERROR: No se pudieron obtener precios de BTC")
-        return False
-
-    analysis = strategy.analyze()
+def print_prediction(analysis):
+    """Print a clear prediction from an AnalysisResult."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # Determine prediction text
     if analysis.signal == Signal.BUY_YES:
-        direction = "SUBE"
+        direction = "ALZA"
         arrow = "/\\"
+        apuesta = ">>> APUESTA A LA ALZA <<<"
         color_start = "\033[92m"  # Green
     elif analysis.signal == Signal.BUY_NO:
         direction = "BAJA"
         arrow = "\\/"
+        apuesta = ">>> APUESTA A LA BAJA <<<"
         color_start = "\033[91m"  # Red
     else:
-        direction = "INDEFINIDO"
+        direction = "INCIERTO"
         arrow = "--"
+        apuesta = ">>> NO APOSTAR (senal debil) <<<"
         color_start = "\033[93m"  # Yellow
 
     color_end = "\033[0m"
     confidence_pct = analysis.confidence * 100
 
-    # Build confidence bar [████████░░]
+    # Build confidence bar
     bar_filled = int(confidence_pct / 5)
     bar_empty = 20 - bar_filled
     confidence_bar = "█" * bar_filled + "░" * bar_empty
@@ -77,13 +75,13 @@ def print_prediction(strategy):
     print(f"  ║        PRONOSTICO BITCOIN - 5 MINUTOS           ║")
     print(f"  ╠══════════════════════════════════════════════════╣")
     print(f"  ║                                                  ║")
-    print(f"  ║  Precio actual:  ${analysis.current_price:>10,.2f}                ║")
+    print(f"  ║  Precio cierre:  ${analysis.current_price:>10,.2f}                ║")
     print(f"  ║  Hora:           {now}       ║")
     print(f"  ║                                                  ║")
-    print(f"  ║  ┌────────────────────────────────────────────┐  ║")
-    print(f"  ║  │  {color_start}{arrow} BTC va a: {direction:>10}  ({confidence_pct:5.1f}%){color_end}       │  ║")
-    print(f"  ║  │  Confianza: [{confidence_bar}]  │  ║")
-    print(f"  ║  └────────────────────────────────────────────┘  ║")
+    print(f"  ║  {color_start}{apuesta:^48}{color_end}  ║")
+    print(f"  ║                                                  ║")
+    print(f"  ║  Confianza:      {confidence_pct:5.1f}%                          ║")
+    print(f"  ║  [{confidence_bar}]                ║")
     print(f"  ║                                                  ║")
     print(f"  ║  Indicadores:                                    ║")
     print(f"  ║    RSI:        {analysis.rsi:6.1f}  {'(sobrecompra)' if analysis.rsi > 70 else '(sobreventa)' if analysis.rsi < 30 else '(neutral)':>20}  ║")
@@ -95,14 +93,75 @@ def print_prediction(strategy):
     print(f"  ╚══════════════════════════════════════════════════╝")
     print()
 
-    return True
-
 
 def run_predict():
-    """Run a single prediction."""
+    """Run a single automatic prediction."""
     strategy_config = load_strategy_config()
     strategy = BTCStrategy(strategy_config)
-    print_prediction(strategy)
+
+    print("\n  Obteniendo datos de BTC...")
+    if not strategy.fetch_recent_prices():
+        print("  ERROR: No se pudieron obtener precios de BTC")
+        return
+
+    analysis = strategy.analyze()
+    print_prediction(analysis)
+
+
+def run_apostar():
+    """Interactive mode: user enters close price, bot says ALZA or BAJA."""
+    strategy_config = load_strategy_config()
+    strategy = BTCStrategy(strategy_config)
+
+    print("\n  Obteniendo datos historicos de BTC (ultimos 60 min)...")
+    if not strategy.fetch_recent_prices():
+        print("  ERROR: No se pudieron obtener precios de BTC")
+        return
+
+    print("  Datos cargados OK.\n")
+    print("  ╔══════════════════════════════════════════════════╗")
+    print("  ║   MODO APUESTA - Ingresa el precio de cierre    ║")
+    print("  ║   del ultimo ciclo de 5 min y te digo si        ║")
+    print("  ║   apostar a la ALZA o a la BAJA.                ║")
+    print("  ║                                                  ║")
+    print("  ║   Escribe 'salir' para terminar.                ║")
+    print("  ╚══════════════════════════════════════════════════╝")
+
+    round_num = 0
+
+    while True:
+        print()
+        try:
+            user_input = input("  Precio de cierre BTC (ej: 83250.50): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n\n  Saliendo...\n")
+            break
+
+        if user_input.lower() in ("salir", "exit", "quit", "q"):
+            print("\n  Saliendo...\n")
+            break
+
+        # Parse price
+        try:
+            close_price = float(user_input.replace(",", "").replace("$", ""))
+        except ValueError:
+            print("  ERROR: Ingresa un numero valido (ej: 83250.50)")
+            continue
+
+        if close_price <= 0:
+            print("  ERROR: El precio debe ser mayor a 0")
+            continue
+
+        round_num += 1
+
+        # Add the user's close price to the historical data
+        strategy.add_manual_price(close_price)
+
+        # Run analysis with the updated price data
+        analysis = strategy.analyze()
+
+        print(f"\n  --- Ronda #{round_num} ---")
+        print_prediction(analysis)
 
 
 def run_watch(interval: int = 60):
@@ -117,7 +176,11 @@ def run_watch(interval: int = 60):
         while True:
             count += 1
             print(f"  --- Prediccion #{count} ---")
-            print_prediction(strategy)
+            if not strategy.fetch_recent_prices():
+                print("  ERROR: No se pudieron obtener precios")
+            else:
+                analysis = strategy.analyze()
+                print_prediction(analysis)
             time.sleep(interval)
     except KeyboardInterrupt:
         print(f"\n  Monitoreo detenido. Total predicciones: {count}\n")
@@ -128,9 +191,14 @@ def main():
         description="Polymarket Bitcoin 5-minute prediction trading bot"
     )
     parser.add_argument(
+        "--apostar",
+        action="store_true",
+        help="Modo interactivo: ingresa precio de cierre y te dice ALZA o BAJA",
+    )
+    parser.add_argument(
         "--predict",
         action="store_true",
-        help="Pronostico unico: sube o baja BTC en 5 min",
+        help="Pronostico unico automatico: sube o baja BTC en 5 min",
     )
     parser.add_argument(
         "--watch",
@@ -166,6 +234,10 @@ def main():
     args = parser.parse_args()
 
     setup_logging(args.verbose)
+
+    if args.apostar:
+        run_apostar()
+        return
 
     if args.predict or args.analyze_only:
         run_predict()

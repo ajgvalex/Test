@@ -359,6 +359,23 @@ class BTCStrategy:
         bearish = sum(1 for s in signals.values() if s < -0.1)
         consensus = max(bullish, bearish)
 
+        # Trend consensus override: if 4+ trend indicators agree AND the fast
+        # indicators (momentum, microtrend) confirm, flip the score.
+        # This prevents mean-reversion from overriding sustained moves
+        # while avoiding false flips during trend transitions.
+        trend_indicators = ["momentum", "sma_cross", "macd", "microtrend", "regression"]
+        trend_bullish = sum(1 for n in trend_indicators if signals[n] > 0.1)
+        trend_bearish = sum(1 for n in trend_indicators if signals[n] < -0.1)
+
+        # Fast confirmation: momentum and microtrend must agree
+        fast_bearish = signals["momentum"] < -0.05 or signals["microtrend"] < -0.15
+        fast_bullish = signals["momentum"] > 0.05 or signals["microtrend"] > 0.15
+
+        if trend_bearish >= 4 and fast_bearish and score > 0:
+            score = -abs(score)
+        elif trend_bullish >= 4 and fast_bullish and score < 0:
+            score = abs(score)
+
         # Confidence: scale up and boost when consensus is strong
         confidence = min(abs(score) * 2.5, 1.0)
         if consensus >= 5:
@@ -419,16 +436,16 @@ class BTCStrategy:
 
     def _rsi_signal(self, prices: np.ndarray) -> float:
         rsi = self._calculate_rsi(prices)
-        if rsi < self.config.rsi_oversold:
-            return 1.0
-        elif rsi < self.config.rsi_mild_oversold:
-            return 0.4
-        elif rsi > self.config.rsi_overbought:
-            return -1.0
-        elif rsi > self.config.rsi_mild_overbought:
-            return -0.4
+        if rsi < self.config.rsi_oversold:  # < 30
+            return 0.6   # Moderate bullish (not max - could be strong downtrend)
+        elif rsi < self.config.rsi_mild_oversold:  # 30-40
+            return 0.2   # Mild bullish hint
+        elif rsi > self.config.rsi_overbought:  # > 70
+            return -0.6  # Moderate bearish
+        elif rsi > self.config.rsi_mild_overbought:  # 60-70
+            return -0.2  # Mild bearish hint
         else:
-            return 0.0  # Dead zone: 40-60
+            return 0.0   # Dead zone: 40-60
 
     def _momentum_signal(self, prices: np.ndarray) -> float:
         mom = self._calculate_momentum(prices)
@@ -448,13 +465,13 @@ class BTCStrategy:
 
     def _bollinger_signal(self, prices: np.ndarray) -> float:
         position = self._bollinger_position(prices)
-        # Only signal at extremes: above 80% or below 20% of bands
-        if position > 0.8:
-            return -(position - 0.8) * 5  # -0 to -1.0
-        elif position < 0.2:
-            return (0.2 - position) * 5   # 0 to +1.0
+        # Only signal at real extremes, and cap at 0.5 to prevent domination
+        if position > 0.85:
+            return float(np.clip(-(position - 0.85) * 6.67, -0.5, 0.0))  # max -0.5
+        elif position < 0.15:
+            return float(np.clip((0.15 - position) * 6.67, 0.0, 0.5))   # max +0.5
         else:
-            return 0.0  # No signal in the middle 60%
+            return 0.0  # No signal in the middle 70%
 
     def _macd_signal(self, prices: np.ndarray) -> float:
         hist = self._macd_histogram_value(prices)

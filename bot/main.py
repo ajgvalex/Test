@@ -111,18 +111,23 @@ def print_prediction(analysis, learning_feedback=None, weights=None):
     print(f"  ║  {pred_arrow}  ${analysis.predicted_price:>10,.2f}  ({analysis.predicted_change_pct:+.3f}%) {pred_dir:>8}  ║")
     print(f"  ║                                                  ║")
     print("  ╠══════════════════════════════════════════════════╣")
-    print(f"  ║  Indicadores:                                    ║")
-    print(f"  ║    RSI:        {analysis.rsi:6.1f}  {'(sobrecompra)' if analysis.rsi > 70 else '(sobreventa)' if analysis.rsi < 30 else '(neutral)':>20}  ║")
+    print(f"  ║  Indicadores (7):          Consenso: {analysis.consensus}/7       ║")
+    print(f"  ║    RSI:        {analysis.rsi:6.1f}  {'(sobrecompra)' if analysis.rsi > 70 else '(sobreventa)' if analysis.rsi < 30 else '(zona muerta)' if 40 <= analysis.rsi <= 60 else '(leve)':>20}  ║")
     print(f"  ║    Momentum:  {analysis.momentum:+8.4f}  {'(alcista)' if analysis.momentum > 0 else '(bajista)':>20}  ║")
-    print(f"  ║    SMA 5:     ${analysis.sma_short:>10,.2f}                ║")
-    print(f"  ║    SMA 20:    ${analysis.sma_long:>10,.2f}                ║")
+    print(f"  ║    SMA:        {analysis.sma_short:>8,.0f} vs {analysis.sma_long:>8,.0f}           ║")
+    print(f"  ║    Bollinger:  {analysis.bollinger_position:5.1%}  {'(techo)' if analysis.bollinger_position > 0.8 else '(piso)' if analysis.bollinger_position < 0.2 else '(medio)':>20}  ║")
+    print(f"  ║    MACD Hist: {analysis.macd_histogram:+8.2f}  {'(alcista)' if analysis.macd_histogram > 0 else '(bajista)':>20}  ║")
+    print(f"  ║    MicroTrend: {analysis.microtrend:+5.2f}     {'(mas alzas)' if analysis.microtrend > 0 else '(mas bajas)':>20}  ║")
+    print(f"  ║    Regimen:    {analysis.volatility_regime:>10}                   ║")
 
     # Show adaptive weights and accuracy
     if weights is not None:
         print(f"  ║                                                  ║")
         print("  ╠══════════════════════════════════════════════════╣")
         print("  ║  MODELO ADAPTATIVO                               ║")
-        print(f"  ║    Pesos: RSI={weights.w_rsi:.0%}  MOM={weights.w_momentum:.0%}  SMA={weights.w_sma:.0%}       ║")
+        w = weights.weights
+        print(f"  ║    RSI={w['rsi']:.0%} MOM={w['momentum']:.0%} SMA={w['sma_cross']:.0%} REG={w['regression']:.0%}    ║")
+        print(f"  ║    BOL={w['bollinger']:.0%} MACD={w['macd']:.0%} uTR={w['microtrend']:.0%}              ║")
         acc = weights.accuracy * 100
         print(f"  ║    Precision: {acc:5.1f}% ({weights.correct_predictions}/{weights.total_predictions} aciertos)         ║")
 

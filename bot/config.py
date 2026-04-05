@@ -31,8 +31,16 @@ class StrategyConfig:
     rsi_period: int = 14
     rsi_overbought: float = 70.0
     rsi_oversold: float = 30.0
+    rsi_mild_overbought: float = 60.0
+    rsi_mild_oversold: float = 40.0
     momentum_window: int = 5
     confidence_threshold: float = 0.15
+    bollinger_period: int = 20
+    macd_fast: int = 5
+    macd_slow: int = 12
+    macd_signal_period: int = 3
+    microtrend_window: int = 10
+    volatility_threshold: float = 0.002
 
 
 def load_polymarket_config() -> PolymarketConfig:
